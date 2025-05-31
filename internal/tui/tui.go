@@ -158,7 +158,7 @@ func Initial(
 	ti.Prompt = "\u276F "
 	ti.Placeholder = "ask anything"
 	ti.Focus()
-	ti.CharLimit = 1024
+	ti.CharLimit = 4096
 	m.textinput = ti
 	return m
 }
