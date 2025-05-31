@@ -99,6 +99,17 @@ func WithSetDefaultMode(name string) modelOption {
 	}
 }
 
+func WithSetDefaultModel(model string) modelOption {
+	return func(m *Model) {
+		for _, id := range m.listModels() {
+			if m.getModelSlug(id) == model {
+				m.openRouterModel = id
+				return
+			}
+		}
+	}
+}
+
 func Initial(
 	logger logger.Logger,
 	openRouterKey string,
@@ -117,10 +128,11 @@ func Initial(
 		panic("no modes defined or default mode not set")
 	}
 	// init the model
-	models := m.listModels()
-	m.openRouterModel = models[0]
+	if m.openRouterModel == "" {
+		m.openRouterModel = m.listModels()[0]
+	}
 	m.fastButCapableModel = "google/gemini-2.5-flash-preview-05-20"
-	m.thoroughButCostlyModel = "openai/gpt-4.1"
+	m.thoroughButCostlyModel = "anthropic/claude-sonnet-4"
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
 	model := llm.NewOpenRouter(logger, m.openRouterKey, m.openRouterModel)

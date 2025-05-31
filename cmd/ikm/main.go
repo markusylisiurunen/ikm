@@ -23,12 +23,14 @@ var rawPrompt string
 type config struct {
 	debug         bool
 	mode          string
+	model         string
 	openRouterKey string
 }
 
 func (c *config) read() {
 	c.debug = os.Getenv("DEBUG") == "1" || os.Getenv("DEBUG") == "true"
 	c.mode = os.Getenv("MODE")
+	c.model = os.Getenv("MODEL")
 	c.openRouterKey = os.Getenv("OPENROUTER_KEY")
 }
 
@@ -71,6 +73,7 @@ func main() {
 		tui.WithStaticMode("dev", devPrompt),
 		tui.WithStaticMode("raw", rawPrompt),
 		tui.WithSetDefaultMode(cfg.mode),
+		tui.WithSetDefaultModel(cfg.model),
 	)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {

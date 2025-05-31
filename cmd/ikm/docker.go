@@ -18,7 +18,7 @@ func buildBashDockerIfNeeded() error {
 	cmdsToExecute := []string{
 		"apt-get update",
 		"apt-get install -y git tree ripgrep curl",
-		"curl -sSL https://go.dev/dl/go1.24.2.linux-amd64.tar.gz | tar -C /usr/local -xzf -",
+		"curl -sSL https://go.dev/dl/go1.24.3.linux-amd64.tar.gz | tar -C /usr/local -xzf -",
 		"echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh",
 		"chmod +x /etc/profile.d/go.sh && source /etc/profile.d/go.sh",
 		"go mod tidy",

@@ -1,6 +1,6 @@
 module github.com/markusylisiurunen/ikm
 
-go 1.24.2
+go 1.24.3
 
 require (
 	github.com/charmbracelet/bubbles v0.21.0
