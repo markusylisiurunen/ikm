@@ -66,6 +66,7 @@ type Model struct {
 	unsubscribe  func()
 
 	cancelFunc context.CancelFunc
+	errorMsg   string
 }
 
 type modelOption func(*Model)
@@ -174,7 +175,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			if !errors.Is(msg.err, context.Canceled) {
 				m.logger.Error(msg.err.Error())
+				m.errorMsg = msg.err.Error()
 			}
+			m.viewport.SetContent(m.renderContent())
+			m.viewport.GotoBottom()
 			return m, waitAgentCmd(m.subscription)
 		}
 		m.viewport.SetContent(m.renderContent())
@@ -200,6 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.handleSlashCommand()
 				return m, nil
 			}
+			m.errorMsg = ""
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFunc = cancel
 			m.agent.Send(ctx, m.textinput.Value())
@@ -267,6 +272,12 @@ func (m Model) renderContent() string {
 			}
 		}
 	}
+	if m.errorMsg != "" {
+		if s != "" {
+			s += "\n\n"
+		}
+		s += m.renderError(m.errorMsg)
+	}
 	return s
 }
 
@@ -285,6 +296,45 @@ func (m Model) renderMarkdown(content string) string {
 	)
 	markdown, _ := renderer.Render(strings.TrimSpace(content))
 	return strings.TrimSpace(markdown)
+}
+
+func (m Model) renderError(errorMsg string) string {
+	const (
+		borderBottomLeft  = "┗"
+		borderBottomRight = "┛"
+		borderHorizontal  = "━"
+		borderTopLeft     = "┏"
+		borderTopRight    = "┓"
+		borderVertical    = "┃"
+		padding           = 2
+	)
+	// calculate usable width
+	maxContentWidth := max(m.viewport.Width-2*padding-2, 10)
+	wrappedLines := strings.Split(wrapWithPrefix(errorMsg, "", maxContentWidth), "\n")
+	var result strings.Builder
+	boxWidth := m.viewport.Width - 2
+	// top border
+	result.WriteString(color.New(color.FgRed, color.Bold).Sprint(borderTopLeft))
+	result.WriteString(color.New(color.FgRed, color.Bold).Sprint(strings.Repeat(borderHorizontal, boxWidth)))
+	result.WriteString(color.New(color.FgRed, color.Bold).Sprintf(borderTopRight))
+	result.WriteString("\n")
+	// content lines
+	for _, line := range wrappedLines {
+		result.WriteString(color.New(color.FgRed, color.Bold).Sprint(borderVertical + " "))
+		result.WriteString(color.New(color.FgRed).Sprint(line))
+		// add padding to align right border
+		paddingSize := boxWidth - len(line) - 2
+		if paddingSize > 0 {
+			result.WriteString(strings.Repeat(" ", paddingSize))
+		}
+		result.WriteString(color.New(color.FgRed, color.Bold).Sprint(" " + borderVertical))
+		result.WriteString("\n")
+	}
+	// bottom border
+	result.WriteString(color.New(color.FgRed, color.Bold).Sprint(borderBottomLeft))
+	result.WriteString(color.New(color.FgRed, color.Bold).Sprint(strings.Repeat(borderHorizontal, boxWidth)))
+	result.WriteString(color.New(color.FgRed, color.Bold).Sprint(borderBottomRight))
+	return result.String()
 }
 
 func (m Model) renderToolField(key, value string) string {
@@ -516,6 +566,7 @@ func (m *Model) handleSlashCommand() {
 
 func (m *Model) handleClearSlashCommand() {
 	m.agent.Reset()
+	m.errorMsg = ""
 }
 
 func (m *Model) handleCopySlashCommand() {
