@@ -18,6 +18,7 @@ import (
 	"github.com/markusylisiurunen/ikm/internal/logger"
 	"github.com/markusylisiurunen/ikm/toolkit/llm"
 	"github.com/markusylisiurunen/ikm/toolkit/tool"
+	"github.com/tidwall/gjson"
 )
 
 type agentMsg struct {
@@ -241,6 +242,16 @@ func (m Model) renderContent() string {
 					s += "\n\n"
 				}
 				s += color.New(color.FgYellow).Sprint("\u25CF") + color.New(color.Bold).Sprintf(" %s", call.Function.Name)
+				switch call.Function.Name {
+				case "bash":
+					s += m.renderToolBash(call.Function.Args)
+				case "fs":
+					s += m.renderToolFS(call.Function.Args)
+				case "llm":
+					s += m.renderToolLLM(call.Function.Args)
+				case "task":
+					s += m.renderToolTask(call.Function.Args)
+				}
 			}
 		}
 	}
@@ -262,6 +273,111 @@ func (m Model) renderMarkdown(content string) string {
 	)
 	markdown, _ := renderer.Render(strings.TrimSpace(content))
 	return strings.TrimSpace(markdown)
+}
+
+func (m Model) renderToolField(key, value string) string {
+	if value == "" {
+		return ""
+	}
+	line := "  " + key + ": " + value
+	maxWidth := m.viewport.Width
+	if len(line) <= maxWidth {
+		return color.New(color.Faint).Sprint(line)
+	}
+	const ellipsis = "..."
+	if maxWidth <= len(ellipsis) {
+		return color.New(color.Faint).Sprint(ellipsis[:maxWidth])
+	}
+	truncated := line[:maxWidth-len(ellipsis)] + ellipsis
+	return color.New(color.Faint).Sprint(truncated)
+}
+
+func (m Model) renderToolFields(fields map[string]string) string {
+	var parts []string
+	fieldOrder := []string{
+		"command",
+		"op",
+		"path",
+		"model",
+		"system prompt",
+		"user prompt",
+		"image files",
+		"pdf files",
+		"effort",
+		"task",
+	}
+	for _, key := range fieldOrder {
+		if value, exists := fields[key]; exists && value != "" {
+			parts = append(parts, m.renderToolField(key, value))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(parts, "\n")
+}
+
+func (m Model) renderToolBash(args string) string {
+	cmd := gjson.Get(args, "cmd").String()
+	if cmd == "" {
+		return ""
+	}
+	lines := strings.Split(cmd, "\n")
+	if len(lines) > 1 {
+		cmd = lines[0]
+	}
+	return m.renderToolFields(map[string]string{"command": cmd})
+}
+
+func (m Model) renderToolFS(args string) string {
+	op := gjson.Get(args, "op").String()
+	if op == "" {
+		return ""
+	}
+	fields := map[string]string{"op": op}
+	if path := gjson.Get(args, "path").String(); path != "" {
+		fields["path"] = path
+	}
+	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolLLM(args string) string {
+	model := gjson.Get(args, "model").String()
+	userPrompt := gjson.Get(args, "user_prompt").String()
+	if model == "" || userPrompt == "" {
+		return ""
+	}
+	fields := map[string]string{"model": model}
+	if systemPrompt := gjson.Get(args, "system_prompt").String(); systemPrompt != "" {
+		systemPrompt = strings.TrimSpace(systemPrompt)
+		wordCount := len(strings.Fields(systemPrompt))
+		fields["system prompt"] = fmt.Sprintf("%d words", wordCount)
+	}
+	userPrompt = strings.TrimSpace(userPrompt)
+	wordCount := len(strings.Fields(userPrompt))
+	fields["user prompt"] = fmt.Sprintf("%d words", wordCount)
+	if imagePaths := gjson.Get(args, "image_paths").Array(); len(imagePaths) > 0 {
+		fields["image files"] = fmt.Sprintf("%d", len(imagePaths))
+	}
+	if pdfPaths := gjson.Get(args, "pdf_paths").Array(); len(pdfPaths) > 0 {
+		fields["pdf files"] = fmt.Sprintf("%d", len(pdfPaths))
+	}
+	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolTask(args string) string {
+	effort := gjson.Get(args, "effort").String()
+	task := gjson.Get(args, "task").String()
+	if effort == "" || task == "" {
+		return ""
+	}
+	fields := map[string]string{"effort": effort}
+	taskLines := strings.Split(task, "\n")
+	if len(taskLines) > 0 {
+		taskLine := strings.TrimSpace(taskLines[0])
+		fields["task"] = taskLine
+	}
+	return m.renderToolFields(fields)
 }
 
 func (m Model) renderFooter() string {
