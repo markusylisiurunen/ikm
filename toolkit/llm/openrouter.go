@@ -121,7 +121,7 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 			ch <- &ErrorEvent{Err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck
 		if resp.StatusCode != http.StatusOK {
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
@@ -446,21 +446,22 @@ func (m *openRouter_Message) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("error unmarshalling OpenRouter message: %w", err)
 	}
 	if len(aux.Content) > 0 {
-		if aux.Content[0] == '"' {
+		switch aux.Content[0] {
+		case '"':
 			var contentStr string
 			if err := json.Unmarshal(aux.Content, &contentStr); err != nil {
 				return fmt.Errorf("error unmarshalling OpenRouter message content as string: %w", err)
 			}
 			m.ContentParts = nil
 			m.ContentString = contentStr
-		} else if aux.Content[0] == '[' {
+		case '[':
 			var contentParts openRouter_Message_ContentParts
 			if err := json.Unmarshal(aux.Content, &contentParts); err != nil {
 				return fmt.Errorf("error unmarshalling OpenRouter message content as array: %w", err)
 			}
 			m.ContentParts = contentParts
 			m.ContentString = ""
-		} else {
+		default:
 			return fmt.Errorf("unexpected content type in OpenRouter message: %s", aux.Content)
 		}
 	}
