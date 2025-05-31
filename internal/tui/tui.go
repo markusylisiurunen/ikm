@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/fatih/color"
 	"github.com/markusylisiurunen/ikm/internal/agent"
 	"github.com/markusylisiurunen/ikm/internal/logger"
@@ -230,8 +232,10 @@ func (m Model) renderContent() string {
 			if i > 0 {
 				s += "\n\n"
 			}
-			content := wrapWithPrefix(msg.Content.Text(), "", m.viewport.Width)
-			s += strings.TrimSpace(content)
+			content := msg.Content.Text()
+			if content != "" {
+				s += m.renderMarkdown(content)
+			}
 			for idx, call := range msg.ToolCalls {
 				if content != "" || idx > 0 {
 					s += "\n\n"
@@ -241,6 +245,23 @@ func (m Model) renderContent() string {
 		}
 	}
 	return s
+}
+
+func (m Model) renderMarkdown(content string) string {
+	var margin uint = 0
+	dark := styles.DarkStyleConfig
+	dark.Document.Color = nil
+	dark.Document.Margin = &margin
+	dark.H1 = dark.H2
+	dark.H1.Prefix = "# "
+	dark.Code.Prefix = ""
+	dark.Code.Suffix = ""
+	renderer, _ := glamour.NewTermRenderer(
+		glamour.WithStyles(dark),
+		glamour.WithWordWrap(m.viewport.Width),
+	)
+	markdown, _ := renderer.Render(strings.TrimSpace(content))
+	return strings.TrimSpace(markdown)
 }
 
 func (m Model) renderFooter() string {
