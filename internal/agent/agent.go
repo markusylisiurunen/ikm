@@ -7,7 +7,8 @@ import (
 
 	"slices"
 
-	"github.com/markusylisiurunen/ikm/internal/model"
+	"github.com/markusylisiurunen/ikm/internal/logger"
+	"github.com/markusylisiurunen/ikm/toolkit/llm"
 )
 
 type Event any
@@ -20,19 +21,21 @@ type ErrorEvent struct {
 
 type Agent struct {
 	mux           sync.RWMutex
-	tools         []model.Tool
-	model         model.Model
-	streamOptions []model.StreamOption
+	logger        logger.Logger
+	tools         []llm.Tool
+	model         llm.Model
+	system        func() string
+	streamOptions []llm.StreamOption
 
 	running  bool
-	messages []model.Message
-	usage    model.Usage
+	messages []llm.Message
+	usage    llm.Usage
 
 	subscriptions []chan<- Event
 }
 
-func New(tools []model.Tool) *Agent {
-	return &Agent{tools: tools}
+func New(logger logger.Logger, tools []llm.Tool) *Agent {
+	return &Agent{logger: logger, tools: tools}
 }
 
 func (a *Agent) Reset() {
@@ -40,7 +43,7 @@ func (a *Agent) Reset() {
 	defer a.mux.Unlock()
 	a.running = false
 	a.messages = nil
-	a.usage = model.Usage{}
+	a.usage = llm.Usage{}
 }
 
 func (a *Agent) Subscribe() (<-chan Event, func()) {
@@ -61,15 +64,27 @@ func (a *Agent) Subscribe() (<-chan Event, func()) {
 	}
 }
 
-func (a *Agent) SetModel(llm model.Model, options ...model.StreamOption) {
+func (a *Agent) SetModel(model llm.Model, options ...llm.StreamOption) {
 	a.mux.Lock()
 	defer a.mux.Unlock()
-	a.model = llm
+	a.model = model
 	a.streamOptions = options
-	a.streamOptions = append(a.streamOptions, model.WithMaxTurns(16))
+	a.streamOptions = append(a.streamOptions, llm.WithMaxTurns(16))
 }
 
-func (a *Agent) GetState() ([]model.Message, model.Usage) {
+func (a *Agent) SetSystem(system func() string) {
+	a.mux.Lock()
+	defer a.mux.Unlock()
+	a.system = system
+}
+
+func (a *Agent) GetIsRunning() bool {
+	a.mux.RLock()
+	defer a.mux.RUnlock()
+	return a.running
+}
+
+func (a *Agent) GetHistoryState() ([]llm.Message, llm.Usage) {
 	a.mux.RLock()
 	defer a.mux.RUnlock()
 	return a.messages, a.usage
@@ -86,35 +101,86 @@ func (a *Agent) send(ctx context.Context, message string) {
 	}
 	a.running = true
 	a.mux.Unlock()
-	a.messages = append(a.messages, model.Message{
-		Role:    model.RoleUser,
-		Content: model.ContentParts{model.NewTextContentPart(message)},
+	a.messages = append(a.messages, llm.Message{
+		Role:    llm.RoleUser,
+		Content: llm.ContentParts{llm.NewTextContentPart(message)},
 	})
+	a.notify(&ChangeEvent{})
 	for event := range a.model.Stream(ctx, a.getMessageHistory(), a.streamOptions...) {
 		switch e := event.(type) {
-		case *model.ContentDeltaEvent:
+		case *llm.ContentDeltaEvent:
 			a.mux.Lock()
-			if msg := a.messages[len(a.messages)-1]; msg.Role != model.RoleAssistant {
-				a.messages = append(a.messages, model.Message{
-					Role:    model.RoleAssistant,
-					Content: model.ContentParts{},
+			if msg := a.messages[len(a.messages)-1]; msg.Role != llm.RoleAssistant {
+				a.messages = append(a.messages, llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: llm.ContentParts{},
 				})
 			}
 			a.messages[len(a.messages)-1].Content.AppendText(e.Content)
 			a.mux.Unlock()
 			a.notify(&ChangeEvent{})
-		case *model.ToolUseEvent:
-			continue // TODO: handle tool use
-		case *model.ToolResultEvent:
-			continue // TODO: handle tool result
-		case *model.UsageEvent:
+		case *llm.ToolUseEvent:
 			a.mux.Lock()
-			a.usage.PromptTokens += e.Usage.PromptTokens
-			a.usage.CompletionTokens += e.Usage.CompletionTokens
+			if msg := a.messages[len(a.messages)-1]; msg.Role != llm.RoleAssistant {
+				a.messages = append(a.messages, llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: llm.ContentParts{},
+				})
+			}
+			a.messages[len(a.messages)-1].ToolCalls = append(
+				a.messages[len(a.messages)-1].ToolCalls,
+				llm.ToolCall{
+					ID:    e.ID,
+					Index: e.Index,
+					Function: llm.ToolCallFunction{
+						Name: e.FuncName,
+						Args: e.FuncArgs,
+					},
+				},
+			)
+			a.mux.Unlock()
+			a.notify(&ChangeEvent{})
+		case *llm.ToolResultEvent:
+			a.mux.Lock()
+			var msg *llm.Message
+			for i := len(a.messages) - 1; i >= 0; i-- {
+				if a.messages[i].Role == llm.RoleAssistant {
+					msg = &a.messages[i]
+					break
+				}
+			}
+			if msg == nil {
+				a.logger.Error("tool result event without assistant message: %s", e.ID)
+			} else {
+				var toolCall *llm.ToolCall
+				for _, call := range msg.ToolCalls {
+					if call.ID == e.ID {
+						toolCall = &call
+						break
+					}
+				}
+				if toolCall == nil {
+					a.logger.Error("tool result event without matching tool call: %s", e.ID)
+				} else {
+					a.messages = append(a.messages, llm.Message{
+						Role:       llm.RoleTool,
+						ToolCallID: toolCall.ID,
+						Name:       toolCall.Function.Name,
+						Content:    llm.ContentParts{},
+					})
+					a.messages[len(a.messages)-1].Content.AppendText(e.Result)
+				}
+			}
+			a.mux.Unlock()
+			a.notify(&ChangeEvent{})
+		case *llm.UsageEvent:
+			a.mux.Lock()
+			a.usage.PromptTokens = e.Usage.PromptTokens
+			a.usage.CompletionTokens = e.Usage.CompletionTokens
 			a.usage.TotalCost += e.Usage.TotalCost
 			a.mux.Unlock()
 			a.notify(&ChangeEvent{})
-		case *model.ErrorEvent:
+		case *llm.ErrorEvent:
 			a.notify(&ErrorEvent{Err: e.Err})
 		default:
 			a.notify(fmt.Errorf("unknown event type: %T", e))
@@ -126,20 +192,34 @@ func (a *Agent) send(ctx context.Context, message string) {
 }
 
 func (a *Agent) notify(event Event) {
+	var subsToNotify []chan<- Event
 	a.mux.RLock()
-	defer a.mux.RUnlock()
-	for _, ch := range a.subscriptions {
-		ch <- event
+	if len(a.subscriptions) > 0 {
+		subsToNotify = make([]chan<- Event, len(a.subscriptions))
+		copy(subsToNotify, a.subscriptions)
+	}
+	a.mux.RUnlock()
+	for _, ch := range subsToNotify {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					a.logger.Error("panic in agent notify: %v", r)
+				}
+			}()
+			ch <- event
+		}()
 	}
 }
 
-func (a *Agent) getMessageHistory() []model.Message {
+func (a *Agent) getMessageHistory() []llm.Message {
 	a.mux.RLock()
 	defer a.mux.RUnlock()
-	messages := make([]model.Message, 0, 1+len(a.messages))
-	messages = append(messages, model.Message{
-		Role:    model.RoleSystem,
-		Content: model.ContentParts{model.NewTextContentPart("You are a helpful assistant.")},
-	})
+	messages := make([]llm.Message, 0, 1+len(a.messages))
+	if a.system != nil {
+		messages = append(messages, llm.Message{
+			Role:    llm.RoleSystem,
+			Content: llm.ContentParts{llm.NewTextContentPart(a.system())},
+		})
+	}
 	return append(messages, a.messages...)
 }

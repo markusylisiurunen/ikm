@@ -1,4 +1,4 @@
-package model
+package llm
 
 import (
 	"context"
@@ -66,6 +66,32 @@ func NewTextContentPart(text string) TextContentPart {
 	return TextContentPart{Type: "text", Text: text}
 }
 
+type ImageContentPart struct {
+	Type     string
+	ImageURL string
+}
+
+func NewImageContentPart(urlOrBase64Data string) ImageContentPart {
+	return ImageContentPart{
+		Type:     "image_url",
+		ImageURL: urlOrBase64Data,
+	}
+}
+
+type FileContentPart struct {
+	Type     string
+	FileName string
+	FileData string
+}
+
+func NewFileContentPart(name, base64Data string) FileContentPart {
+	return FileContentPart{
+		Type:     "file",
+		FileName: name,
+		FileData: base64Data,
+	}
+}
+
 type ContentParts []ContentPart
 
 func (c *ContentParts) AppendText(text string) {
@@ -88,6 +114,10 @@ func (c ContentParts) Text() string {
 		switch p := part.(type) {
 		case TextContentPart:
 			sb.WriteString(p.Text)
+		case ImageContentPart:
+			sb.WriteString("\n\n[image: " + p.ImageURL + "]\n\n")
+		case FileContentPart:
+			sb.WriteString("\n\n[file: " + p.FileName + "]\n\n")
 		}
 	}
 	return sb.String()
@@ -109,10 +139,13 @@ type Usage struct {
 
 // model -------------------------------------------------------------------------------------------
 
+type StopCondition func(turn int, history []Message) bool
+
 type streamConfig struct {
 	maxTokens       int
 	maxTurns        int
 	reasoningEffort uint8
+	stopCondition   StopCondition
 	temperature     float64
 }
 
@@ -135,6 +168,9 @@ func WithReasoningEffortLow() StreamOption {
 }
 func WithTemperature(temperature float64) StreamOption {
 	return func(c *streamConfig) { c.temperature = temperature }
+}
+func WithStopCondition(condition StopCondition) StreamOption {
+	return func(c *streamConfig) { c.stopCondition = condition }
 }
 
 type Model interface {

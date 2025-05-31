@@ -1,4 +1,4 @@
-package model
+package llm
 
 import (
 	"context"

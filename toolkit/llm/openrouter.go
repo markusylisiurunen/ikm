@@ -1,4 +1,4 @@
-package model
+package llm
 
 import (
 	"bufio"
@@ -11,18 +11,22 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/markusylisiurunen/ikm/internal/logger"
+	"golang.org/x/sync/errgroup"
 )
 
 var _ Model = (*OpenRouter)(nil)
 
 type OpenRouter struct {
-	token string
-	model string
-	tools []Tool
+	logger logger.Logger
+	token  string
+	model  string
+	tools  []Tool
 }
 
-func NewOpenRouter(token, model string) *OpenRouter {
-	return &OpenRouter{token: token, model: model}
+func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
+	return &OpenRouter{logger: logger, token: token, model: model}
 }
 
 func (o *OpenRouter) Register(tool Tool) {
@@ -42,6 +46,12 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 		cloned := make([]Message, len(messages))
 		copy(cloned, messages)
 		for turn := range config.maxTurns {
+			select {
+			case <-ctx.Done():
+				ch <- &ErrorEvent{Err: ctx.Err()}
+				return
+			default:
+			}
 			out := tee(o.streamTurn(ctx, cloned, config), ch)
 			builder := newMessageBuilder()
 			for event := range out {
@@ -52,31 +62,51 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 				return
 			}
 			cloned = append(cloned, messages[0])
-			for _, toolCall := range messages[0].ToolCalls {
-				var tool Tool
-				for _, t := range o.tools {
-					if name, _, _ := t.Spec(); name == toolCall.Function.Name {
-						tool = t
-						break
-					}
+			if len(messages[0].ToolCalls) > 0 {
+				toolResultEvents := make([]*ToolResultEvent, len(messages[0].ToolCalls))
+				g, gctx := errgroup.WithContext(ctx)
+				for idx, toolCall := range messages[0].ToolCalls {
+					g.Go(func() error {
+						var tool Tool
+						for _, t := range o.tools {
+							if name, _, _ := t.Spec(); name == toolCall.Function.Name {
+								tool = t
+								break
+							}
+						}
+						if tool == nil {
+							return fmt.Errorf("tool %s not found", toolCall.Function.Name)
+						}
+						result, err := tool.Call(gctx, toolCall.Function.Args)
+						toolResultEvents[idx] = &ToolResultEvent{ID: toolCall.ID, Result: result, Error: err}
+						return nil
+					})
 				}
-				if tool == nil {
-					ch <- &ErrorEvent{Err: fmt.Errorf("tool %s not found", toolCall.Function.Name)}
+				if err := g.Wait(); err != nil {
+					ch <- &ErrorEvent{Err: fmt.Errorf("error executing tool calls: %w", err)}
 					return
 				}
-				result, err := tool.Call(ctx, toolCall.Function.Args)
-				ch <- &ToolResultEvent{ID: toolCall.ID, Result: result, Error: err}
-				msg := Message{
-					Role:       RoleTool,
-					Name:       toolCall.Function.Name,
-					ToolCallID: toolCall.ID,
+				for idx, event := range toolResultEvents {
+					if event == nil {
+						ch <- &ErrorEvent{Err: fmt.Errorf("tool call %d result is nil", idx)}
+						return
+					}
+					ch <- event
+					msg := Message{
+						Role:       RoleTool,
+						Name:       messages[0].ToolCalls[idx].Function.Name,
+						ToolCallID: messages[0].ToolCalls[idx].ID,
+					}
+					if event.Error != nil {
+						msg.Content = ContentParts{NewTextContentPart("Error: " + event.Error.Error())}
+					} else {
+						msg.Content = ContentParts{NewTextContentPart(event.Result)}
+					}
+					cloned = append(cloned, msg)
 				}
-				if err != nil {
-					msg.Content = ContentParts{NewTextContentPart("Error: " + err.Error())}
-				} else {
-					msg.Content = ContentParts{NewTextContentPart(result)}
-				}
-				cloned = append(cloned, msg)
+			}
+			if config.stopCondition != nil && config.stopCondition(turn, cloned) {
+				return
 			}
 		}
 	}()
@@ -92,6 +122,15 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				ch <- &ErrorEvent{Err: fmt.Errorf("error reading response body: %w", err)}
+			} else {
+				ch <- &ErrorEvent{Err: fmt.Errorf("non-ok status (%d) from OpenRouter: %s", resp.StatusCode, string(body))}
+			}
+			return
+		}
 		toolCallBuffer := make([]*ToolUseEvent, 10)
 		reader := bufio.NewReader(resp.Body)
 		for {
@@ -234,6 +273,7 @@ func (o *OpenRouter) request(
 	if err := encoder.Encode(payload); err != nil {
 		return nil, fmt.Errorf("error marshalling request: %w", err)
 	}
+	o.logger.Debug("OpenRouter request payload: %s", data.String())
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", &data)
 	if err != nil {
@@ -272,9 +312,28 @@ type openRouter_Message_ToolCall struct {
 	Function *openRouter_Message_ToolCall_Function `json:"function,omitempty"`
 }
 
+type openRouter_Message_ContentPart_ImageURL struct {
+	URL string `json:"url,omitzero"`
+}
+
+func (i openRouter_Message_ContentPart_ImageURL) IsZero() bool {
+	return i.URL == ""
+}
+
+type openRouter_Message_ContentPart_File struct {
+	FileName string `json:"filename,omitzero"`
+	FileData string `json:"file_data,omitzero"`
+}
+
+func (f openRouter_Message_ContentPart_File) IsZero() bool {
+	return f.FileName == "" && f.FileData == ""
+}
+
 type openRouter_Message_ContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string                                  `json:"type"`
+	Text     string                                  `json:"text,omitzero"`
+	ImageURL openRouter_Message_ContentPart_ImageURL `json:"image_url,omitzero"`
+	File     openRouter_Message_ContentPart_File     `json:"file,omitzero"`
 }
 
 type openRouter_Message_ContentParts []openRouter_Message_ContentPart
@@ -291,6 +350,31 @@ func (c *openRouter_Message_ContentParts) appendText(text string) {
 	} else {
 		*c = append(*c, openRouter_Message_ContentPart{Type: "text", Text: text})
 	}
+}
+
+func (c *openRouter_Message_ContentParts) appendImage(urlOrBase64Data string) {
+	if c == nil {
+		return
+	}
+	*c = append(*c, openRouter_Message_ContentPart{
+		Type: "image_url",
+		ImageURL: openRouter_Message_ContentPart_ImageURL{
+			URL: urlOrBase64Data,
+		},
+	})
+}
+
+func (c *openRouter_Message_ContentParts) appendFile(name, base64Data string) {
+	if c == nil {
+		return
+	}
+	*c = append(*c, openRouter_Message_ContentPart{
+		Type: "file",
+		File: openRouter_Message_ContentPart_File{
+			FileName: name,
+			FileData: base64Data,
+		},
+	})
 }
 
 type openRouter_Message struct {
@@ -313,6 +397,18 @@ func (m *openRouter_Message) from(msg Message) error {
 				m.ContentString += p.Text
 			} else {
 				m.ContentParts.appendText(p.Text)
+			}
+		case ImageContentPart:
+			if msg.Role != RoleUser {
+				return fmt.Errorf("image content part can only be used in user messages, got role: %s", msg.Role)
+			} else {
+				m.ContentParts.appendImage(p.ImageURL)
+			}
+		case FileContentPart:
+			if msg.Role != RoleUser {
+				return fmt.Errorf("file content part can only be used in user messages, got role: %s", msg.Role)
+			} else {
+				m.ContentParts.appendFile(p.FileName, p.FileData)
 			}
 		default:
 			return fmt.Errorf("unexpected content part type: %T", part)

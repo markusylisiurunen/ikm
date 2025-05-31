@@ -1,4 +1,4 @@
-package model
+package llm
 
 import "fmt"
 
@@ -40,23 +40,36 @@ func (b *messageBuilder) process(event Event) {
 		b.msgs[len(b.msgs)-1].ToolCalls = append(b.msgs[len(b.msgs)-1].ToolCalls, tc)
 	case *ToolResultEvent:
 		b.init = true
-		var tc *ToolCall
-		for _, i := range b.msgs[len(b.msgs)-1].ToolCalls {
-			if i.ID == e.ID {
-				tc = &i
+		var msg *Message
+		for i := len(b.msgs) - 1; i >= 0; i-- {
+			if b.msgs[i].Role == RoleAssistant {
+				msg = &b.msgs[i]
 				break
 			}
 		}
-		if tc == nil {
-			b.err = fmt.Errorf("tool call %q not found", e.ID)
+		if msg == nil {
+			b.err = fmt.Errorf("tool result event without assistant message: %s", e.ID)
 			return
+		} else {
+			var toolCall *ToolCall
+			for _, call := range msg.ToolCalls {
+				if call.ID == e.ID {
+					toolCall = &call
+					break
+				}
+			}
+			if toolCall == nil {
+				b.err = fmt.Errorf("tool result event without matching tool call: %s", e.ID)
+				return
+			} else {
+				b.msgs = append(b.msgs, Message{
+					Role:       RoleTool,
+					Content:    ContentParts{NewTextContentPart(e.Result)},
+					Name:       toolCall.Function.Name,
+					ToolCallID: e.ID,
+				})
+			}
 		}
-		b.msgs = append(b.msgs, Message{
-			Role:       RoleTool,
-			Content:    ContentParts{NewTextContentPart(e.Result)},
-			Name:       tc.Function.Name,
-			ToolCallID: e.ID,
-		})
 	case *UsageEvent:
 		b.usage.PromptTokens += e.Usage.PromptTokens
 		b.usage.CompletionTokens += e.Usage.CompletionTokens
