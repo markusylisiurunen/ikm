@@ -68,6 +68,9 @@ func main() {
 	if cfg.mode != "agent" && cfg.mode != "dev" && cfg.mode != "raw" {
 		log.Fatalf("invalid MODE environment variable: %s, must be one of: agent, dev, raw", cfg.mode)
 	}
+	if cfg.model == "" {
+		cfg.model = "claude-sonnet-4"
+	}
 	model := tui.Initial(debugLogger, cfg.openRouterKey, runInBashDocker,
 		tui.WithStaticMode("agent", agentPrompt),
 		tui.WithStaticMode("dev", devPrompt),

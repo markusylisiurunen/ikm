@@ -181,7 +181,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			return m, waitAgentCmd(m.subscription)
 		}
+		atBottom := m.viewport.AtBottom()
 		m.viewport.SetContent(m.renderContent())
+		if atBottom {
+			m.viewport.GotoBottom()
+		}
 		return m, waitAgentCmd(m.subscription)
 	}
 	switch msg := msg.(type) {
@@ -258,7 +262,13 @@ func (m Model) renderContent() string {
 				if content != "" || idx > 0 {
 					s += "\n\n"
 				}
-				s += color.New(color.FgYellow).Sprint("\u25CF") + color.New(color.Bold).Sprintf(" %s", call.Function.Name)
+				var circleColor *color.Color
+				if m.agent.IsToolCallInFlight(call.ID) {
+					circleColor = color.New(color.FgYellow)
+				} else {
+					circleColor = color.New(color.FgGreen)
+				}
+				s += circleColor.Sprint("\u25CF") + color.New(color.Bold).Sprintf(" %s", call.Function.Name)
 				switch call.Function.Name {
 				case "bash":
 					s += m.renderToolBash(call.Function.Args)
@@ -474,10 +484,13 @@ func (m Model) renderFooter() string {
 
 func (m Model) listModels() []string {
 	return []string{
-		"anthropic/claude-3.7-sonnet",
-		"google/gemini-2.5-flash-preview",
-		"google/gemini-2.5-flash-preview:thinking",
+		"anthropic/claude-opus-4",
+		"anthropic/claude-sonnet-4",
+		"google/gemini-2.5-flash-preview-05-20",
+		"google/gemini-2.5-flash-preview-05-20:thinking",
 		"google/gemini-2.5-pro-preview",
+		"mistralai/devstral-small",
+		"openai/codex-mini",
 		"openai/gpt-4.1",
 		"openai/gpt-4.1-mini",
 		"openai/o3",
@@ -487,14 +500,20 @@ func (m Model) listModels() []string {
 
 func (m Model) getModelSlug(model string) string {
 	switch model {
-	case "anthropic/claude-3.7-sonnet":
-		return "claude-3.7-sonnet"
-	case "google/gemini-2.5-flash-preview":
+	case "anthropic/claude-opus-4":
+		return "claude-opus-4"
+	case "anthropic/claude-sonnet-4":
+		return "claude-sonnet-4"
+	case "google/gemini-2.5-flash-preview-05-20":
 		return "gemini-2.5-flash"
-	case "google/gemini-2.5-flash-preview:thinking":
+	case "google/gemini-2.5-flash-preview-05-20:thinking":
 		return "gemini-2.5-flash-thinking"
 	case "google/gemini-2.5-pro-preview":
 		return "gemini-2.5-pro"
+	case "mistralai/devstral-small":
+		return "devstral-small"
+	case "openai/codex-mini":
+		return "codex-mini"
 	case "openai/gpt-4.1":
 		return "gpt-4.1"
 	case "openai/gpt-4.1-mini":

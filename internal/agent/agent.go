@@ -27,21 +27,27 @@ type Agent struct {
 	system        func() string
 	streamOptions []llm.StreamOption
 
-	running  bool
-	messages []llm.Message
-	usage    llm.Usage
+	running       bool
+	inFlightTools map[string]bool
+	messages      []llm.Message
+	usage         llm.Usage
 
 	subscriptions []chan<- Event
 }
 
 func New(logger logger.Logger, tools []llm.Tool) *Agent {
-	return &Agent{logger: logger, tools: tools}
+	return &Agent{
+		logger:        logger,
+		tools:         tools,
+		inFlightTools: make(map[string]bool),
+	}
 }
 
 func (a *Agent) Reset() {
 	a.mux.Lock()
 	defer a.mux.Unlock()
 	a.running = false
+	a.inFlightTools = make(map[string]bool)
 	a.messages = nil
 	a.usage = llm.Usage{}
 }
@@ -88,6 +94,12 @@ func (a *Agent) GetHistoryState() ([]llm.Message, llm.Usage) {
 	a.mux.RLock()
 	defer a.mux.RUnlock()
 	return a.messages, a.usage
+}
+
+func (a *Agent) IsToolCallInFlight(toolCallID string) bool {
+	a.mux.RLock()
+	defer a.mux.RUnlock()
+	return a.inFlightTools[toolCallID]
 }
 
 func (a *Agent) Send(ctx context.Context, message string) {
@@ -138,10 +150,12 @@ func (a *Agent) send(ctx context.Context, message string) {
 					},
 				},
 			)
+			a.inFlightTools[e.ID] = true
 			a.mux.Unlock()
 			a.notify(&ChangeEvent{})
 		case *llm.ToolResultEvent:
 			a.mux.Lock()
+			delete(a.inFlightTools, e.ID)
 			var msg *llm.Message
 			for i := len(a.messages) - 1; i >= 0; i-- {
 				if a.messages[i].Role == llm.RoleAssistant {
