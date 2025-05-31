@@ -10,14 +10,17 @@ import (
 	"strings"
 	"time"
 
+	"slices"
+
 	"github.com/markusylisiurunen/ikm/internal/logger"
 	"github.com/markusylisiurunen/ikm/toolkit/llm"
 	"github.com/tidwall/gjson"
 )
 
 const (
-	llmToolTimeout         = 5 * time.Minute
+	llmToolMaxFileSize     = 50 * 1024 * 1024
 	llmToolMaxPromptLength = 32 * 1024
+	llmToolTimeout         = 5 * time.Minute
 )
 
 type llmToolResult struct {
@@ -115,9 +118,17 @@ func (t *llmTool) Spec() (string, string, json.RawMessage) {
 func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, llmToolTimeout)
 	defer cancel()
+	if !gjson.Valid(args) {
+		t.logger.Error("llm tool called with invalid JSON arguments")
+		return llmToolResult{Error: "invalid JSON arguments"}.result()
+	}
 	model := gjson.Get(args, "model").String()
 	if model == "" {
 		return llmToolResult{Error: "model cannot be empty"}.result()
+	}
+	modelValid := slices.Contains(t.availableModels, model)
+	if !modelValid {
+		return llmToolResult{Error: fmt.Sprintf("model %q is not available", model)}.result()
 	}
 	systemPrompt := gjson.Get(args, "system_prompt").String()
 	userPrompt := gjson.Get(args, "user_prompt").String()
@@ -192,6 +203,9 @@ func (t *llmTool) loadImageFile(imagePath string) (llm.ImageContentPart, error) 
 		return llm.ImageContentPart{}, fmt.Errorf("failed to get current directory: %w", err)
 	}
 	cleanPath := filepath.Clean(imagePath)
+	if strings.Contains(cleanPath, "..") {
+		return llm.ImageContentPart{}, fmt.Errorf("image path must not contain '..' sequences")
+	}
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return llm.ImageContentPart{}, fmt.Errorf("failed to resolve absolute path: %w", err)
@@ -199,6 +213,13 @@ func (t *llmTool) loadImageFile(imagePath string) (llm.ImageContentPart, error) 
 	relPath, err := filepath.Rel(cwd, absPath)
 	if err != nil || strings.HasPrefix(relPath, "..") {
 		return llm.ImageContentPart{}, fmt.Errorf("image path must be within the current directory")
+	}
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		return llm.ImageContentPart{}, fmt.Errorf("failed to stat image file: %w", err)
+	}
+	if fileInfo.Size() > llmToolMaxFileSize {
+		return llm.ImageContentPart{}, fmt.Errorf("image file size exceeds limit of %d bytes", llmToolMaxFileSize)
 	}
 	imageData, err := os.ReadFile(absPath)
 	if err != nil {
@@ -224,6 +245,9 @@ func (t *llmTool) loadPDFFile(pdfPath string) (llm.FileContentPart, error) {
 		return llm.FileContentPart{}, fmt.Errorf("failed to get current directory: %w", err)
 	}
 	cleanPath := filepath.Clean(pdfPath)
+	if strings.Contains(cleanPath, "..") {
+		return llm.FileContentPart{}, fmt.Errorf("PDF path must not contain '..' sequences")
+	}
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return llm.FileContentPart{}, fmt.Errorf("failed to resolve absolute path: %w", err)
@@ -231,6 +255,13 @@ func (t *llmTool) loadPDFFile(pdfPath string) (llm.FileContentPart, error) {
 	relPath, err := filepath.Rel(cwd, absPath)
 	if err != nil || strings.HasPrefix(relPath, "..") {
 		return llm.FileContentPart{}, fmt.Errorf("PDF path must be within the current directory")
+	}
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		return llm.FileContentPart{}, fmt.Errorf("failed to stat PDF file: %w", err)
+	}
+	if fileInfo.Size() > llmToolMaxFileSize {
+		return llm.FileContentPart{}, fmt.Errorf("PDF file size exceeds limit of %d bytes", llmToolMaxFileSize)
 	}
 	fileData, err := os.ReadFile(absPath)
 	if err != nil {

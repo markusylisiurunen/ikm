@@ -11,6 +11,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const (
+	bashToolMaxCmdLength = 8192
+)
+
 type bashToolResult struct {
 	Ok     bool   `json:"ok"`
 	Error  string `json:"error,omitzero"`
@@ -68,10 +72,18 @@ func (t *bashTool) Spec() (string, string, json.RawMessage) {
 }
 
 func (t *bashTool) Call(ctx context.Context, args string) (string, error) {
+	if !gjson.Valid(args) {
+		t.logger.Error("bash tool called with invalid JSON arguments")
+		return bashToolResult{Ok: false, Error: "invalid JSON arguments"}.result()
+	}
 	cmd := gjson.Get(args, "cmd").String()
 	if cmd == "" {
 		t.logger.Error("bash tool called without command")
-		return fsToolResult{Ok: false, Error: "command is required"}.result()
+		return bashToolResult{Ok: false, Error: "command is required"}.result()
+	}
+	if len(cmd) > bashToolMaxCmdLength {
+		t.logger.Error("bash tool called with command exceeding max length: %d", len(cmd))
+		return bashToolResult{Ok: false, Error: fmt.Sprintf("command exceeds maximum length of %d characters", bashToolMaxCmdLength)}.result()
 	}
 	_, stdout, stderr, err := t.exec(ctx, cmd)
 	if err != nil {

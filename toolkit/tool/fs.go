@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	fsToolMaxFileSize  = 10 * 1024 * 1024
 	fsToolMaxFileCount = 10000
+	fsToolMaxFileSize  = 10 * 1024 * 1024
 )
 
 type fsToolResult struct {
@@ -86,6 +86,10 @@ func (t *fsTool) Spec() (string, string, json.RawMessage) {
 }
 
 func (t *fsTool) Call(ctx context.Context, args string) (string, error) {
+	if !gjson.Valid(args) {
+		t.logger.Error("fs tool called with invalid JSON arguments")
+		return fsToolResult{Ok: false, Error: "invalid JSON arguments"}.result()
+	}
 	var (
 		operation = gjson.Get(args, "op").String()
 		result    string
@@ -124,7 +128,11 @@ func (t *fsTool) list(ctx context.Context, _ string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("command failed: %s", err.Error())
 	}
-	files := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	output := strings.TrimSpace(stdout.String())
+	if output == "" {
+		return fsToolResult{Ok: true, Files: []string{}}.result()
+	}
+	files := strings.Split(output, "\n")
 	if len(files) > fsToolMaxFileCount {
 		return "", fmt.Errorf("too many files to list: %d exceeds limit of %d", len(files), fsToolMaxFileCount)
 	}
@@ -136,14 +144,18 @@ func (t *fsTool) read(ctx context.Context, args string) (string, error) {
 	if filePath == "" {
 		return "", fmt.Errorf("path parameter is required for read operation")
 	}
-	fileInfo, err := os.Stat(filePath)
+	cleanPath := filepath.Clean(filePath)
+	if strings.Contains(cleanPath, "..") {
+		return "", fmt.Errorf("path must not contain '..' sequences")
+	}
+	fileInfo, err := os.Stat(cleanPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %s", err.Error())
 	}
 	if fileInfo.Size() > fsToolMaxFileSize {
 		return "", fmt.Errorf("file size exceeds limit of %d bytes", fsToolMaxFileSize)
 	}
-	cmd := exec.CommandContext(ctx, "cat", filePath)
+	cmd := exec.CommandContext(ctx, "cat", cleanPath)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -175,6 +187,9 @@ func (t *fsTool) write(_ context.Context, args string) (string, error) {
 		return "", fmt.Errorf("failed to get current directory: %s", err.Error())
 	}
 	cleanPath := filepath.Clean(filePath)
+	if strings.Contains(cleanPath, "..") {
+		return "", fmt.Errorf("path must not contain '..' sequences")
+	}
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve absolute path: %s", err.Error())
@@ -203,6 +218,9 @@ func (t *fsTool) remove(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("failed to get current directory: %s", err.Error())
 	}
 	cleanPath := filepath.Clean(filePath)
+	if strings.Contains(cleanPath, "..") {
+		return "", fmt.Errorf("path must not contain '..' sequences")
+	}
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve absolute path: %s", err.Error())

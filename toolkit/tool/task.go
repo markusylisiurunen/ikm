@@ -104,6 +104,10 @@ func (t *taskTool) Spec() (string, string, json.RawMessage) {
 func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, taskToolExecTimeout)
 	defer cancel()
+	if !gjson.Valid(args) {
+		t.logger.Error("task tool called with invalid JSON arguments")
+		return taskToolResult{Error: "invalid JSON arguments"}.result()
+	}
 	effort := gjson.Get(args, "effort").String()
 	desc := gjson.Get(args, "task").String()
 	if desc == "" {
@@ -120,6 +124,9 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 		modelName = t.thoroughButCostlyModel
 	default:
 		return taskToolResult{Error: "effort must be 'fast' or 'thorough'"}.result()
+	}
+	if modelName == "" {
+		return taskToolResult{Error: fmt.Sprintf("no model configured for effort level '%s'", effort)}.result()
 	}
 	t.logger.Debug("executing task with effort %q and model %q: %s", effort, modelName, desc)
 	reporter := &writeReportTool{}
@@ -268,6 +275,9 @@ func (t *writeReportTool) Spec() (string, string, json.RawMessage) {
 }
 
 func (t *writeReportTool) Call(ctx context.Context, args string) (string, error) {
+	if !gjson.Valid(args) {
+		return `{"error": "invalid JSON arguments"}`, nil
+	}
 	if t.report != "" {
 		return `{"error": "report already written"}`, nil
 	}
@@ -278,6 +288,10 @@ func (t *writeReportTool) Call(ctx context.Context, args string) (string, error)
 	if len(report) > taskToolMaxReportLength {
 		return fmt.Sprintf(`{"error": "report exceeds maximum length of %d characters"}`, taskToolMaxReportLength), nil
 	}
-	t.report = report
+	trimmedReport := strings.TrimSpace(report)
+	if len(trimmedReport) < 10 {
+		return `{"error": "report must contain at least 10 characters of meaningful content"}`, nil
+	}
+	t.report = trimmedReport
 	return `{"ok": true}`, nil
 }
