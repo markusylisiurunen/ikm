@@ -1,10 +1,14 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +23,7 @@ import (
 
 const (
 	llmToolMaxFileSize     = 50 * 1024 * 1024
+	llmToolMaxImageSize    = 1536 // 2*768 pixels: https://ai.google.dev/gemini-api/docs/image-understanding#technical-details-image
 	llmToolMaxPromptLength = 32 * 1024
 	llmToolTimeout         = 5 * time.Minute
 )
@@ -226,16 +231,11 @@ func (t *llmTool) loadImageFile(imagePath string) (llm.ImageContentPart, error) 
 		return llm.ImageContentPart{}, fmt.Errorf("failed to read image file: %w", err)
 	}
 	ext := strings.ToLower(filepath.Ext(absPath))
-	var mediaType string
-	switch ext {
-	case ".jpg", ".jpeg":
-		mediaType = "image/jpeg"
-	case ".png":
-		mediaType = "image/png"
-	default:
-		return llm.ImageContentPart{}, fmt.Errorf("unsupported image format: %s (supported: .jpg, .jpeg, .png)", ext)
+	resizedData, mediaType, err := resizeImage(imageData, ext, llmToolMaxImageSize)
+	if err != nil {
+		return llm.ImageContentPart{}, fmt.Errorf("failed to process image: %w", err)
 	}
-	base64Data := base64.StdEncoding.EncodeToString(imageData)
+	base64Data := base64.StdEncoding.EncodeToString(resizedData)
 	return llm.NewImageContentPart(fmt.Sprintf("data:%s;base64,%s", mediaType, base64Data)), nil
 }
 
@@ -278,4 +278,59 @@ func (t *llmTool) loadPDFFile(pdfPath string) (llm.FileContentPart, error) {
 	fileName := filepath.Base(absPath)
 	base64Data := base64.StdEncoding.EncodeToString(fileData)
 	return llm.NewFileContentPart(fileName, fmt.Sprintf("data:%s;base64,%s", mediaType, base64Data)), nil
+}
+
+func resizeImage(imageData []byte, ext string, maxSize int) ([]byte, string, error) {
+	img, format, err := image.Decode(bytes.NewReader(imageData))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to decode image: %w", err)
+	}
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	shortestSide := min(height, width)
+	if shortestSide <= maxSize {
+		var mediaType string
+		switch strings.ToLower(ext) {
+		case ".jpg", ".jpeg":
+			mediaType = "image/jpeg"
+		case ".png":
+			mediaType = "image/png"
+		default:
+			return nil, "", fmt.Errorf("unsupported image format: %s", ext)
+		}
+		return imageData, mediaType, nil
+	}
+	var newWidth, newHeight int
+	if width < height {
+		newWidth = maxSize
+		newHeight = (height * maxSize) / width
+	} else {
+		newHeight = maxSize
+		newWidth = (width * maxSize) / height
+	}
+	resized := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
+	for y := range newHeight {
+		for x := range newWidth {
+			srcX := (x * width) / newWidth
+			srcY := (y * height) / newHeight
+			resized.Set(x, y, img.At(srcX, srcY))
+		}
+	}
+	var buf bytes.Buffer
+	var mediaType string
+	switch format {
+	case "jpeg":
+		mediaType = "image/jpeg"
+		err = jpeg.Encode(&buf, resized, &jpeg.Options{Quality: 90})
+	case "png":
+		mediaType = "image/png"
+		err = png.Encode(&buf, resized)
+	default:
+		mediaType = "image/jpeg"
+		err = jpeg.Encode(&buf, resized, &jpeg.Options{Quality: 90})
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to encode resized image: %w", err)
+	}
+	return buf.Bytes(), mediaType, nil
 }
