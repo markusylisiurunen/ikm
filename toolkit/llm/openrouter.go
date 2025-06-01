@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,32 +20,46 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
+type OpenRouterOption func(*OpenRouter)
+
 type OpenRouter struct {
-	logger   logger.Logger
-	token    string
-	model    string
-	tools    []Tool
-	provider *openRouter_Request_Provider
+	logger     logger.Logger
+	token      string
+	model      string
+	tools      []Tool
+	provider   *openRouter_Request_Provider
+	transforms []openRouterRequestTransform
 }
 
-func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
-	return &OpenRouter{logger: logger, token: token, model: model}
-}
-
-type ProviderConfig struct {
-	Only           []string
-	Order          []string
-	AllowFallbacks *bool
-}
-
-func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provider *ProviderConfig) *OpenRouter {
-	o := &OpenRouter{logger: logger, token: token, model: model}
-	if provider != nil {
+func WithOpenRouterOnlyProviders(only []string) OpenRouterOption {
+	return func(o *OpenRouter) {
 		o.provider = &openRouter_Request_Provider{
-			Only:           provider.Only,
-			Order:          provider.Order,
-			AllowFallbacks: provider.AllowFallbacks,
+			Only: only,
 		}
+	}
+}
+
+func WithOpenRouterOrderProviders(order []string, allowFallbacks bool) OpenRouterOption {
+	return func(o *OpenRouter) {
+		o.provider = &openRouter_Request_Provider{
+			Order:          order,
+			AllowFallbacks: &allowFallbacks,
+		}
+	}
+}
+
+func WithOpenRouterRequestTransform(transform openRouterRequestTransform) OpenRouterOption {
+	return func(o *OpenRouter) {
+		if transform != nil {
+			o.transforms = append(o.transforms, transform)
+		}
+	}
+}
+
+func NewOpenRouter(logger logger.Logger, token, model string, opts ...OpenRouterOption) *OpenRouter {
+	o := &OpenRouter{logger: logger, token: token, model: model}
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
 }
@@ -268,6 +284,9 @@ func (o *OpenRouter) request(
 		var m openRouter_Message
 		if err := m.from(msg); err != nil {
 			return nil, fmt.Errorf("error converting message: %w", err)
+		}
+		for _, transform := range o.transforms {
+			transform.transformMessage(&m)
 		}
 		payload.Messages = append(payload.Messages, m)
 	}
@@ -587,4 +606,53 @@ type openRouter_Chunk struct {
 	Model   string                    `json:"model"`
 	Object  string                    `json:"object"`
 	Usage   *openRouter_Chunk_Usage   `json:"usage"`
+}
+
+// request transforms ------------------------------------------------------------------------------
+
+type openRouterRequestTransform interface {
+	transformMessage(*openRouter_Message)
+}
+
+type openRouterHexadecimalToolCallIDRequestTransform struct{}
+
+func NewOpenRouterHexadecimalToolCallIDRequestTransform() openRouterRequestTransform {
+	return &openRouterHexadecimalToolCallIDRequestTransform{}
+}
+
+func (t openRouterHexadecimalToolCallIDRequestTransform) transformMessage(msg *openRouter_Message) {
+	switch msg.Role {
+	case "assistant":
+		for i, toolCall := range msg.ToolCalls {
+			if toolCall.ID != "" {
+				id := t.getID(toolCall.ID)
+				msg.ToolCalls[i].ID = id
+			}
+		}
+	case "tool":
+		if msg.ToolCallID != nil && *msg.ToolCallID != "" {
+			id := t.getID(*msg.ToolCallID)
+			msg.ToolCallID = &id
+		}
+	}
+}
+
+func (t *openRouterHexadecimalToolCallIDRequestTransform) getID(originalID string) string {
+	hash := sha256.Sum256([]byte(originalID))
+	hex := hex.EncodeToString(hash[:])
+	result := ""
+	for _, r := range hex {
+		if len(result) >= 9 {
+			break
+		}
+		allowed := "abcdefghijklmnopqrstuvwxyz0123456789"
+		if strings.ContainsRune(allowed, r) {
+			result += string(r)
+		}
+	}
+	padding := "a1b2c3d4e"
+	for len(result) < 9 {
+		result += string(padding[len(result)])
+	}
+	return result
 }
