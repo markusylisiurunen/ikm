@@ -39,7 +39,7 @@ func WithOpenRouterOnlyProviders(only []string) openRouterOption {
 	}
 }
 
-func WithOpenRouterOrderedProviders(order []string, allowFallbacks bool) openRouterOption {
+func WithOpenRouterOrderProviders(order []string, allowFallbacks bool) openRouterOption {
 	return func(o *OpenRouter) {
 		o.provider = &openRouter_Request_Provider{
 			Order:          order,
@@ -463,10 +463,9 @@ func (m *openRouter_Message) from(msg Message) error {
 	}
 	if len(msg.ToolCalls) > 0 {
 		for _, tc := range msg.ToolCalls {
-			toolCallID := tc.ID
 			m.ToolCalls = append(m.ToolCalls, openRouter_Message_ToolCall{
 				Index: tc.Index,
-				ID:    toolCallID,
+				ID:    tc.ID,
 				Type:  "function",
 				Function: &openRouter_Message_ToolCall_Function{
 					Name:      tc.Function.Name,
@@ -477,8 +476,7 @@ func (m *openRouter_Message) from(msg Message) error {
 	}
 	if msg.Role == RoleTool {
 		m.Name = &msg.Name
-		toolCallID := msg.ToolCallID
-		m.ToolCallID = &toolCallID
+		m.ToolCallID = &msg.ToolCallID
 	}
 	return nil
 }
