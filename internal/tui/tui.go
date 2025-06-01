@@ -771,7 +771,8 @@ func (m *Model) handleModelSlashCommand(args []string) {
 func (m Model) createModelInstance(modelName string) llm.Model {
 	if modelName == "mistralai/devstral-small" {
 		providerConfig := &llm.ProviderConfig{
-			Only: []string{"Mistral"},
+			Only:        []string{"Mistral"},
+			IDTransform: llm.DevstralSmallIDTransform(),
 		}
 		return llm.NewOpenRouterWithProvider(m.logger, m.openRouterKey, modelName, providerConfig)
 	}

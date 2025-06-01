@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,12 +20,16 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
+// ToolCallIDTransform is a function that transforms tool call IDs to conform to provider requirements
+type ToolCallIDTransform func(originalID string) string
+
 type OpenRouter struct {
-	logger   logger.Logger
-	token    string
-	model    string
-	tools    []Tool
-	provider *openRouter_Request_Provider
+	logger      logger.Logger
+	token       string
+	model       string
+	tools       []Tool
+	provider    *openRouter_Request_Provider
+	idTransform ToolCallIDTransform
 }
 
 func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
@@ -34,6 +40,7 @@ type ProviderConfig struct {
 	Only           []string
 	Order          []string
 	AllowFallbacks *bool
+	IDTransform    ToolCallIDTransform
 }
 
 func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provider *ProviderConfig) *OpenRouter {
@@ -44,8 +51,46 @@ func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provid
 			Order:          provider.Order,
 			AllowFallbacks: provider.AllowFallbacks,
 		}
+		o.idTransform = provider.IDTransform
 	}
 	return o
+}
+
+// transformToolCallID applies the ID transform if one is configured
+func (o *OpenRouter) transformToolCallID(originalID string) string {
+	if o.idTransform != nil {
+		return o.idTransform(originalID)
+	}
+	return originalID
+}
+
+// DevstralSmallIDTransform creates a transform function for devstral-small model
+// that generates alphanumeric IDs with length 9
+func DevstralSmallIDTransform() ToolCallIDTransform {
+	return func(originalID string) string {
+		// Use SHA256 hash to create a deterministic transformation
+		hash := sha256.Sum256([]byte(originalID))
+		hex := hex.EncodeToString(hash[:])
+		
+		// Take first 9 characters that are alphanumeric
+		result := ""
+		for _, r := range hex {
+			if len(result) >= 9 {
+				break
+			}
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				result += string(r)
+			}
+		}
+		
+		// Pad with alternating letters and numbers if needed
+		padding := "a1b2c3d4e"
+		for len(result) < 9 {
+			result += string(padding[len(result)])
+		}
+		
+		return result
+	}
 }
 
 func (o *OpenRouter) Register(tool Tool) {
@@ -224,7 +269,7 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 					}
 					if toolCallBuffer[index] == nil {
 						toolCallBuffer[index] = &ToolUseEvent{
-							ID:       toolCall.ID,
+							ID:       o.transformToolCallID(toolCall.ID),
 							Index:    index,
 							FuncName: toolCall.Function.Name,
 							FuncArgs: toolCall.Function.Arguments,
