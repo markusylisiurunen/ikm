@@ -768,16 +768,12 @@ func (m *Model) handleModelSlashCommand(args []string) {
 	}
 }
 
-// createModelInstance creates the appropriate LLM model instance based on the model name
 func (m Model) createModelInstance(modelName string) llm.Model {
-	// Special case for devstral-small: restrict to Mistral provider only
 	if modelName == "mistralai/devstral-small" {
 		providerConfig := &llm.ProviderConfig{
 			Only: []string{"Mistral"},
 		}
 		return llm.NewOpenRouterWithProvider(m.logger, m.openRouterKey, modelName, providerConfig)
 	}
-	
-	// For all other models, use standard configuration without provider restrictions
 	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 }

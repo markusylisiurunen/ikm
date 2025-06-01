@@ -18,17 +18,6 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
-// ProviderConfig allows limiting OpenRouter requests to specific providers
-type ProviderConfig struct {
-	// Only restricts requests to specific providers (e.g., ["anthropic", "openai"])
-	Only []string
-	// Order specifies the preferred order of providers to try
-	Order []string
-	// AllowFallbacks determines if other providers can be used when Order is specified
-	// If false, only providers in Order will be used
-	AllowFallbacks *bool
-}
-
 type OpenRouter struct {
 	logger   logger.Logger
 	token    string
@@ -41,14 +30,19 @@ func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
 	return &OpenRouter{logger: logger, token: token, model: model}
 }
 
-// NewOpenRouterWithProvider creates a new OpenRouter instance with provider configuration
+type ProviderConfig struct {
+	Only           []string
+	Order          []string
+	AllowFallbacks *bool
+}
+
 func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provider *ProviderConfig) *OpenRouter {
 	o := &OpenRouter{logger: logger, token: token, model: model}
 	if provider != nil {
 		o.provider = &openRouter_Request_Provider{
-			Only:          provider.Only,
-			Order:         provider.Order,
-			AllowFallback: provider.AllowFallbacks,
+			Only:           provider.Only,
+			Order:          provider.Order,
+			AllowFallbacks: provider.AllowFallbacks,
 		}
 	}
 	return o
@@ -540,9 +534,9 @@ type openRouter_Request_Usage struct {
 }
 
 type openRouter_Request_Provider struct {
-	Only          []string `json:"only,omitempty"`
-	Order         []string `json:"order,omitempty"`
-	AllowFallback *bool    `json:"allow_fallbacks,omitempty"`
+	Only           []string `json:"only,omitempty"`
+	Order          []string `json:"order,omitempty"`
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
 }
 
 type openRouter_Request struct {
