@@ -10,6 +10,14 @@ IKM is a terminal-based AI coding assistant featuring:
 - Extensible tool system for file operations and code analysis.
 - Real-time streaming responses with cost tracking.
 
+## How to work
+
+- Do no build the code (`go build`) or run tests (`go test`). This is handled for you after you make changes.
+- Never write tests for your code.
+- Code style preferences:
+  - Always match the code style of the surrounding code, including comment style and whitespace.
+  - Use lowercase comments unless uppercase is justified (e.g., proper nouns, acronyms).
+
 ## High-level architecture
 
 Key directories and their primary roles:

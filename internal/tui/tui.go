@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"slices"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -60,11 +62,12 @@ type Model struct {
 	viewport  viewport.Model
 	textinput textinput.Model
 
-	mode         model_Mode
-	modes        []model_Mode
-	agent        *agent.Agent
-	subscription <-chan agent.Event
-	unsubscribe  func()
+	mode          model_Mode
+	modes         []model_Mode
+	disabledTools []string
+	agent         *agent.Agent
+	subscription  <-chan agent.Event
+	unsubscribe   func()
 
 	cancelFunc context.CancelFunc
 	errorMsg   string
@@ -112,6 +115,12 @@ func WithSetDefaultModel(model string) modelOption {
 	}
 }
 
+func WithDisabledTools(tools []string) modelOption {
+	return func(m *Model) {
+		m.disabledTools = tools
+	}
+}
+
 func Initial(
 	logger logger.Logger,
 	openRouterKey string,
@@ -138,11 +147,7 @@ func Initial(
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
 	model := llm.NewOpenRouter(logger, m.openRouterKey, m.openRouterModel)
-	model.Register(tool.NewBash(m.runInBashDocker).SetLogger(logger))
-	model.Register(tool.NewFS().SetLogger(logger))
-	model.Register(tool.NewLLM(m.openRouterKey).SetLogger(logger))
-	model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(logger))
-	model.Register(tool.NewThink().SetLogger(logger))
+	m.registerTools(model)
 	m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
@@ -163,6 +168,38 @@ func Initial(
 	ti.CharLimit = 4096
 	m.textinput = ti
 	return m
+}
+
+func (m Model) registerTools(model llm.Model) {
+	if !m.isToolDisabled("bash") {
+		model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: bash")
+	}
+	if !m.isToolDisabled("fs") {
+		model.Register(tool.NewFS().SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: fs")
+	}
+	if !m.isToolDisabled("llm") {
+		model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: llm")
+	}
+	if !m.isToolDisabled("task") {
+		model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: task")
+	}
+	if !m.isToolDisabled("think") {
+		model.Register(tool.NewThink().SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: think")
+	}
+}
+
+func (m Model) isToolDisabled(toolName string) bool {
+	return slices.Contains(m.disabledTools, toolName)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -724,11 +761,7 @@ func (m *Model) handleModelSlashCommand(args []string) {
 		if m.getModelSlug(id) == args[0] {
 			m.openRouterModel = id
 			model := llm.NewOpenRouter(m.logger, m.openRouterKey, m.openRouterModel)
-			model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
-			model.Register(tool.NewFS().SetLogger(m.logger))
-			model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
-			model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(m.logger))
-			model.Register(tool.NewThink().SetLogger(m.logger))
+			m.registerTools(model)
 			m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
 			return
 		}

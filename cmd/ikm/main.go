@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"flag"
 	"log"
 	"os"
 	"time"
@@ -22,15 +23,42 @@ var rawPrompt string
 
 type config struct {
 	debug         bool
+	disabledTools []string
 	mode          string
 	model         string
 	openRouterKey string
 }
 
 func (c *config) read() {
-	c.debug = os.Getenv("DEBUG") == "1" || os.Getenv("DEBUG") == "true"
-	c.mode = os.Getenv("MODE")
-	c.model = os.Getenv("MODEL")
+	var (
+		debug       = flag.Bool("debug", false, "enable debug logging")
+		mode        = flag.String("mode", "raw", "mode to use (agent, dev, raw)")
+		model       = flag.String("model", "claude-sonnet-4", "model to use")
+		noToolBash  = flag.Bool("no-tool-bash", false, "disable the bash tool")
+		noToolFS    = flag.Bool("no-tool-fs", false, "disable the fs tool")
+		noToolLLM   = flag.Bool("no-tool-llm", false, "disable the llm tool")
+		noToolTask  = flag.Bool("no-tool-task", false, "disable the task tool")
+		noToolThink = flag.Bool("no-tool-think", false, "disable the think tool")
+	)
+	flag.Parse()
+	if *noToolBash {
+		c.disabledTools = append(c.disabledTools, "bash")
+	}
+	if *noToolFS {
+		c.disabledTools = append(c.disabledTools, "fs")
+	}
+	if *noToolLLM {
+		c.disabledTools = append(c.disabledTools, "llm")
+	}
+	if *noToolTask {
+		c.disabledTools = append(c.disabledTools, "task")
+	}
+	if *noToolThink {
+		c.disabledTools = append(c.disabledTools, "think")
+	}
+	c.debug = *debug
+	c.mode = *mode
+	c.model = *model
 	c.openRouterKey = os.Getenv("OPENROUTER_KEY")
 }
 
@@ -62,14 +90,8 @@ func main() {
 		debugLogger.SetLevel("debug")
 	}
 	// init the terminal UI model and run the program
-	if cfg.mode == "" {
-		cfg.mode = "raw"
-	}
 	if cfg.mode != "agent" && cfg.mode != "dev" && cfg.mode != "raw" {
-		log.Fatalf("invalid MODE environment variable: %s, must be one of: agent, dev, raw", cfg.mode)
-	}
-	if cfg.model == "" {
-		cfg.model = "claude-sonnet-4"
+		log.Fatalf("invalid mode: %s, must be one of: agent, dev, raw", cfg.mode)
 	}
 	model := tui.Initial(debugLogger, cfg.openRouterKey, runInBashDocker,
 		tui.WithStaticMode("agent", agentPrompt),
@@ -77,6 +99,7 @@ func main() {
 		tui.WithStaticMode("raw", rawPrompt),
 		tui.WithSetDefaultMode(cfg.mode),
 		tui.WithSetDefaultModel(cfg.model),
+		tui.WithDisabledTools(cfg.disabledTools),
 	)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
