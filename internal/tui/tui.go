@@ -148,7 +148,7 @@ func Initial(
 	m.agent = agent.New(logger, []llm.Tool{})
 	model := m.createModelInstance(m.openRouterModel)
 	m.registerTools(model)
-	m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
+	m.agent.SetModel(model, m.getStreamOptionsForModel(m.openRouterModel)...)
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
 	// init the viewport
@@ -762,7 +762,7 @@ func (m *Model) handleModelSlashCommand(args []string) {
 			m.openRouterModel = id
 			model := m.createModelInstance(m.openRouterModel)
 			m.registerTools(model)
-			m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
+			m.agent.SetModel(model, m.getStreamOptionsForModel(m.openRouterModel)...)
 			return
 		}
 	}
@@ -771,10 +771,17 @@ func (m *Model) handleModelSlashCommand(args []string) {
 func (m Model) createModelInstance(modelName string) llm.Model {
 	if modelName == "mistralai/devstral-small" {
 		providerConfig := &llm.ProviderConfig{
-			Only:        []string{"Mistral"},
-			IDTransform: llm.DevstralSmallIDTransform(),
+			Only: []string{"Mistral"},
 		}
 		return llm.NewOpenRouterWithProvider(m.logger, m.openRouterKey, modelName, providerConfig)
 	}
 	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+}
+
+func (m Model) getStreamOptionsForModel(modelName string) []llm.StreamOption {
+	opts := []llm.StreamOption{llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh()}
+	if modelName == "mistralai/devstral-small" {
+		opts = append(opts, llm.WithToolCallIDTransform(llm.DevstralSmallIDTransform()))
+	}
+	return opts
 }

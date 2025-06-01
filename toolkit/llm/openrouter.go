@@ -24,12 +24,11 @@ var _ Model = (*OpenRouter)(nil)
 type ToolCallIDTransform func(originalID string) string
 
 type OpenRouter struct {
-	logger      logger.Logger
-	token       string
-	model       string
-	tools       []Tool
-	provider    *openRouter_Request_Provider
-	idTransform ToolCallIDTransform
+	logger   logger.Logger
+	token    string
+	model    string
+	tools    []Tool
+	provider *openRouter_Request_Provider
 }
 
 func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
@@ -40,7 +39,6 @@ type ProviderConfig struct {
 	Only           []string
 	Order          []string
 	AllowFallbacks *bool
-	IDTransform    ToolCallIDTransform
 }
 
 func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provider *ProviderConfig) *OpenRouter {
@@ -51,17 +49,8 @@ func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provid
 			Order:          provider.Order,
 			AllowFallbacks: provider.AllowFallbacks,
 		}
-		o.idTransform = provider.IDTransform
 	}
 	return o
-}
-
-// transformToolCallID applies the ID transform if one is configured
-func (o *OpenRouter) transformToolCallID(originalID string) string {
-	if o.idTransform != nil {
-		return o.idTransform(originalID)
-	}
-	return originalID
 }
 
 // DevstralSmallIDTransform creates a transform function for devstral-small model
@@ -150,7 +139,12 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 							return fmt.Errorf("tool %s not found", toolCall.Function.Name)
 						}
 						result, err := tool.Call(gctx, toolCall.Function.Args)
-						toolResultEvents[idx] = &ToolResultEvent{ID: toolCall.ID, Result: result, Error: err}
+						// Transform the ID to match what will be sent to the API
+						transformedID := toolCall.ID
+						if config.idTransform != nil {
+							transformedID = config.idTransform(toolCall.ID)
+						}
+						toolResultEvents[idx] = &ToolResultEvent{ID: transformedID, Result: result, Error: err}
 						return nil
 					})
 				}
@@ -164,10 +158,15 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 						return
 					}
 					ch <- event
+					// Transform the ID to match what will be sent to the API
+					transformedID := messages[0].ToolCalls[idx].ID
+					if config.idTransform != nil {
+						transformedID = config.idTransform(messages[0].ToolCalls[idx].ID)
+					}
 					msg := Message{
 						Role:       RoleTool,
 						Name:       messages[0].ToolCalls[idx].Function.Name,
-						ToolCallID: messages[0].ToolCalls[idx].ID,
+						ToolCallID: transformedID,
 					}
 					if event.Error != nil {
 						msg.Content = ContentParts{NewTextContentPart("Error: " + event.Error.Error())}
@@ -269,7 +268,7 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 					}
 					if toolCallBuffer[index] == nil {
 						toolCallBuffer[index] = &ToolUseEvent{
-							ID:       o.transformToolCallID(toolCall.ID),
+							ID:       toolCall.ID,
 							Index:    index,
 							FuncName: toolCall.Function.Name,
 							FuncArgs: toolCall.Function.Arguments,
@@ -311,7 +310,7 @@ func (o *OpenRouter) request(
 	}
 	for _, msg := range messages {
 		var m openRouter_Message
-		if err := m.from(msg); err != nil {
+		if err := m.from(msg, config.idTransform); err != nil {
 			return nil, fmt.Errorf("error converting message: %w", err)
 		}
 		payload.Messages = append(payload.Messages, m)
@@ -459,7 +458,7 @@ type openRouter_Message struct {
 	ToolCallID    *string                         `json:"tool_call_id,omitempty"`
 }
 
-func (m *openRouter_Message) from(msg Message) error {
+func (m *openRouter_Message) from(msg Message, idTransform func(string) string) error {
 	m.Role = string(msg.Role)
 	m.ContentParts = nil
 	m.ContentString = ""
@@ -489,9 +488,13 @@ func (m *openRouter_Message) from(msg Message) error {
 	}
 	if len(msg.ToolCalls) > 0 {
 		for _, tc := range msg.ToolCalls {
+			toolCallID := tc.ID
+			if idTransform != nil {
+				toolCallID = idTransform(tc.ID)
+			}
 			m.ToolCalls = append(m.ToolCalls, openRouter_Message_ToolCall{
 				Index: tc.Index,
-				ID:    tc.ID,
+				ID:    toolCallID,
 				Type:  "function",
 				Function: &openRouter_Message_ToolCall_Function{
 					Name:      tc.Function.Name,
@@ -502,7 +505,11 @@ func (m *openRouter_Message) from(msg Message) error {
 	}
 	if msg.Role == RoleTool {
 		m.Name = &msg.Name
-		m.ToolCallID = &msg.ToolCallID
+		toolCallID := msg.ToolCallID
+		if idTransform != nil {
+			toolCallID = idTransform(msg.ToolCallID)
+		}
+		m.ToolCallID = &toolCallID
 	}
 	return nil
 }
