@@ -2,10 +2,11 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
-	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -557,7 +558,7 @@ func (m Model) getSlashCommandHelp(cmd string, args []string) string {
 	case "clear":
 		return "clears the conversation history."
 	case "copy":
-		return "copies the last assistant message to the clipboard."
+		return "copies a message or messages to the clipboard: default, index-based or all."
 	case "mode":
 		names := make([]string, len(m.modes))
 		for i, mode := range m.modes {
@@ -589,7 +590,7 @@ func (m *Model) handleSlashCommand() {
 	case "/clear":
 		m.handleClearSlashCommand()
 	case "/copy":
-		m.handleCopySlashCommand()
+		m.handleCopySlashCommand(fields[1:])
 	case "/mode":
 		m.handleModeSlashCommand(fields[1:])
 	case "/model":
@@ -602,15 +603,99 @@ func (m *Model) handleClearSlashCommand() {
 	m.errorMsg = ""
 }
 
-func (m *Model) handleCopySlashCommand() {
+func (m *Model) handleCopySlashCommand(args []string) {
 	messages, _ := m.agent.GetHistoryState()
-	var content string
-	for _, i := range slices.Backward(messages) {
-		if i.Role == llm.RoleAssistant {
-			content = i.Content.Text()
-			break
+	if len(args) > 0 && args[0] == "all" {
+		type jsonMessage_ToolCall struct {
+			FuncName string          `json:"func_name"`
+			FuncArgs json.RawMessage `json:"func_args"`
+		}
+		type jsonMessage struct {
+			Role      string                 `json:"role"`
+			Text      string                 `json:"text,omitzero"`
+			Result    any                    `json:"result,omitzero"`
+			ToolCalls []jsonMessage_ToolCall `json:"tool_calls,omitzero"`
+		}
+		var jsonMessages []jsonMessage
+		for _, msg := range messages {
+			switch msg.Role {
+			case llm.RoleSystem:
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role: "system",
+					Text: msg.Content.Text(),
+				})
+			case llm.RoleAssistant:
+				var toolCalls []jsonMessage_ToolCall
+				for _, call := range msg.ToolCalls {
+					toolCalls = append(toolCalls, jsonMessage_ToolCall{
+						FuncName: call.Function.Name,
+						FuncArgs: json.RawMessage(call.Function.Args),
+					})
+				}
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role:      "assistant",
+					Text:      msg.Content.Text(),
+					ToolCalls: toolCalls,
+				})
+			case llm.RoleTool:
+				var result any = msg.Content.Text()
+				if json.Valid([]byte(msg.Content.Text())) {
+					result = json.RawMessage(msg.Content.Text())
+				}
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role:   "tool",
+					Result: result,
+				})
+			case llm.RoleUser:
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role: "user",
+					Text: msg.Content.Text(),
+				})
+			}
+		}
+		jsonMessagesData, err := json.MarshalIndent(jsonMessages, "", "  ")
+		if err != nil {
+			m.logger.Error("failed to marshal messages to JSON: %v", err)
+			return
+		}
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(string(jsonMessagesData))
+		if err := cmd.Run(); err != nil {
+			m.logger.Error("failed to copy to clipboard: %v", err)
+		}
+		return
+	}
+	var assistantMessages []llm.Message
+	for _, msg := range messages {
+		if msg.Role == llm.RoleAssistant {
+			assistantMessages = append(assistantMessages, msg)
 		}
 	}
+	if len(assistantMessages) == 0 {
+		return
+	}
+	var targetMessage llm.Message
+	if len(args) > 0 {
+		var index int
+		if strings.HasPrefix(args[0], "-") {
+			var err error
+			index, err = strconv.Atoi(args[0][1:])
+			if err != nil || index <= 0 || index > len(assistantMessages) {
+				return
+			}
+			targetMessage = assistantMessages[len(assistantMessages)-index]
+		} else {
+			var err error
+			index, err = strconv.Atoi(args[0])
+			if err != nil || index < 1 || index > len(assistantMessages) {
+				return
+			}
+			targetMessage = assistantMessages[index-1]
+		}
+	} else {
+		targetMessage = assistantMessages[len(assistantMessages)-1]
+	}
+	content := targetMessage.Content.Text()
 	if content == "" {
 		return
 	}
