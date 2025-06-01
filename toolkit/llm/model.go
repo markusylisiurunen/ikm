@@ -147,7 +147,6 @@ type streamConfig struct {
 	reasoningEffort uint8
 	stopCondition   StopCondition
 	temperature     float64
-	idTransform     func(string) string
 }
 
 type StreamOption func(*streamConfig)
@@ -172,9 +171,6 @@ func WithTemperature(temperature float64) StreamOption {
 }
 func WithStopCondition(condition StopCondition) StreamOption {
 	return func(c *streamConfig) { c.stopCondition = condition }
-}
-func WithToolCallIDTransform(transform func(string) string) StreamOption {
-	return func(c *streamConfig) { c.idTransform = transform }
 }
 
 type Model interface {

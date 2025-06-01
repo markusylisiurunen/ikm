@@ -20,66 +20,48 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
-// ToolCallIDTransform is a function that transforms tool call IDs to conform to provider requirements
-type ToolCallIDTransform func(originalID string) string
+type openRouterOption func(*OpenRouter)
 
 type OpenRouter struct {
-	logger   logger.Logger
-	token    string
-	model    string
-	tools    []Tool
-	provider *openRouter_Request_Provider
+	logger     logger.Logger
+	token      string
+	model      string
+	tools      []Tool
+	provider   *openRouter_Request_Provider
+	transforms []openRouterRequestTransform
 }
 
-func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
-	return &OpenRouter{logger: logger, token: token, model: model}
-}
-
-type ProviderConfig struct {
-	Only           []string
-	Order          []string
-	AllowFallbacks *bool
-}
-
-func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provider *ProviderConfig) *OpenRouter {
-	o := &OpenRouter{logger: logger, token: token, model: model}
-	if provider != nil {
+func WithOpenRouterOnlyProviders(only []string) openRouterOption {
+	return func(o *OpenRouter) {
 		o.provider = &openRouter_Request_Provider{
-			Only:           provider.Only,
-			Order:          provider.Order,
-			AllowFallbacks: provider.AllowFallbacks,
+			Only: only,
 		}
+	}
+}
+
+func WithOpenRouterOrderedProviders(order []string, allowFallbacks bool) openRouterOption {
+	return func(o *OpenRouter) {
+		o.provider = &openRouter_Request_Provider{
+			Order:          order,
+			AllowFallbacks: &allowFallbacks,
+		}
+	}
+}
+
+func WithOpenRouterRequestTransform(transform openRouterRequestTransform) openRouterOption {
+	return func(o *OpenRouter) {
+		if transform != nil {
+			o.transforms = append(o.transforms, transform)
+		}
+	}
+}
+
+func NewOpenRouter(logger logger.Logger, token, model string, opts ...openRouterOption) *OpenRouter {
+	o := &OpenRouter{logger: logger, token: token, model: model}
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
-}
-
-// DevstralSmallIDTransform creates a transform function for devstral-small model
-// that generates alphanumeric IDs with length 9
-func DevstralSmallIDTransform() ToolCallIDTransform {
-	return func(originalID string) string {
-		// Use SHA256 hash to create a deterministic transformation
-		hash := sha256.Sum256([]byte(originalID))
-		hex := hex.EncodeToString(hash[:])
-		
-		// Take first 9 characters that are alphanumeric
-		result := ""
-		for _, r := range hex {
-			if len(result) >= 9 {
-				break
-			}
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-				result += string(r)
-			}
-		}
-		
-		// Pad with alternating letters and numbers if needed
-		padding := "a1b2c3d4e"
-		for len(result) < 9 {
-			result += string(padding[len(result)])
-		}
-		
-		return result
-	}
 }
 
 func (o *OpenRouter) Register(tool Tool) {
@@ -310,8 +292,11 @@ func (o *OpenRouter) request(
 	}
 	for _, msg := range messages {
 		var m openRouter_Message
-		if err := m.from(msg, config.idTransform); err != nil {
+		if err := m.from(msg); err != nil {
 			return nil, fmt.Errorf("error converting message: %w", err)
+		}
+		for _, transform := range o.transforms {
+			transform.transformMessage(&m)
 		}
 		payload.Messages = append(payload.Messages, m)
 	}
@@ -458,7 +443,7 @@ type openRouter_Message struct {
 	ToolCallID    *string                         `json:"tool_call_id,omitempty"`
 }
 
-func (m *openRouter_Message) from(msg Message, idTransform func(string) string) error {
+func (m *openRouter_Message) from(msg Message) error {
 	m.Role = string(msg.Role)
 	m.ContentParts = nil
 	m.ContentString = ""
@@ -489,9 +474,6 @@ func (m *openRouter_Message) from(msg Message, idTransform func(string) string) 
 	if len(msg.ToolCalls) > 0 {
 		for _, tc := range msg.ToolCalls {
 			toolCallID := tc.ID
-			if idTransform != nil {
-				toolCallID = idTransform(tc.ID)
-			}
 			m.ToolCalls = append(m.ToolCalls, openRouter_Message_ToolCall{
 				Index: tc.Index,
 				ID:    toolCallID,
@@ -506,9 +488,6 @@ func (m *openRouter_Message) from(msg Message, idTransform func(string) string) 
 	if msg.Role == RoleTool {
 		m.Name = &msg.Name
 		toolCallID := msg.ToolCallID
-		if idTransform != nil {
-			toolCallID = idTransform(msg.ToolCallID)
-		}
 		m.ToolCallID = &toolCallID
 	}
 	return nil
@@ -639,4 +618,49 @@ type openRouter_Chunk struct {
 	Model   string                    `json:"model"`
 	Object  string                    `json:"object"`
 	Usage   *openRouter_Chunk_Usage   `json:"usage"`
+}
+
+// request transforms ------------------------------------------------------------------------------
+
+type openRouterRequestTransform interface {
+	transformMessage(*openRouter_Message)
+}
+
+type openRouterHexadecimalToolCallIDRequestTransform struct{}
+
+func NewOpenRouterHexadecimalToolCallIDRequestTransform() openRouterRequestTransform {
+	return &openRouterHexadecimalToolCallIDRequestTransform{}
+}
+
+func (t openRouterHexadecimalToolCallIDRequestTransform) transformMessage(msg *openRouter_Message) {
+	switch msg.Role {
+	case "assistant":
+		for i, toolCall := range msg.ToolCalls {
+			id := t.getID(toolCall.ID)
+			msg.ToolCalls[i].ID = id
+		}
+	case "tool":
+		id := t.getID(*msg.ToolCallID)
+		msg.ToolCallID = &id
+	}
+}
+
+func (t *openRouterHexadecimalToolCallIDRequestTransform) getID(originalID string) string {
+	hash := sha256.Sum256([]byte(originalID))
+	hex := hex.EncodeToString(hash[:])
+	result := ""
+	for _, r := range hex {
+		if len(result) >= 9 {
+			break
+		}
+		allowed := "abcdefghijklmnopqrstuvwxyz0123456789"
+		if strings.ContainsRune(allowed, r) {
+			result += string(r)
+		}
+	}
+	padding := "a1b2c3d4e"
+	for len(result) < 9 {
+		result += string(padding[len(result)])
+	}
+	return result
 }
