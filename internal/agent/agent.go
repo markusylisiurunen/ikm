@@ -75,7 +75,7 @@ func (a *Agent) SetModel(model llm.Model, options ...llm.StreamOption) {
 	defer a.mux.Unlock()
 	a.model = model
 	a.streamOptions = options
-	a.streamOptions = append(a.streamOptions, llm.WithMaxTurns(16))
+	a.streamOptions = append(a.streamOptions, llm.WithMaxTurns(128))
 }
 
 func (a *Agent) SetSystem(system func() string) {

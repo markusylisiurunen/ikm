@@ -58,7 +58,15 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 				builder.process(event)
 			}
 			messages, _, err := builder.result()
-			if err != nil || len(messages) != 1 || len(messages[0].ToolCalls) == 0 || turn >= config.maxTurns-1 {
+			if err != nil {
+				ch <- &ErrorEvent{Err: fmt.Errorf("error processing events: %w", err)}
+				return
+			}
+			if len(messages) != 1 {
+				ch <- &ErrorEvent{Err: fmt.Errorf("expected exactly one message, got %d", len(messages))}
+				return
+			}
+			if len(messages[0].ToolCalls) == 0 {
 				return
 			}
 			cloned = append(cloned, messages[0])
@@ -105,7 +113,7 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 					cloned = append(cloned, msg)
 				}
 			}
-			if config.stopCondition != nil && config.stopCondition(turn, cloned) {
+			if turn >= config.maxTurns-1 || (config.stopCondition != nil && config.stopCondition(turn, cloned)) {
 				return
 			}
 		}
@@ -471,7 +479,7 @@ func (m *openRouter_Message) UnmarshalJSON(data []byte) error {
 func (m openRouter_Message) MarshalJSON() ([]byte, error) {
 	type Alias openRouter_Message
 	aux := &struct {
-		Content any `json:"content,omitempty"`
+		Content any `json:"content,omitzero"`
 		*Alias
 	}{
 		Alias: (*Alias)(&m),
@@ -480,6 +488,8 @@ func (m openRouter_Message) MarshalJSON() ([]byte, error) {
 		aux.Content = m.ContentParts
 	} else if m.ContentString != "" {
 		aux.Content = m.ContentString
+	} else if m.Role == string(RoleAssistant) {
+		aux.Content = ""
 	}
 	return json.Marshal(aux)
 }
