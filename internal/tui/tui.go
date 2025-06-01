@@ -146,7 +146,7 @@ func Initial(
 	m.thoroughButCostlyModel = "anthropic/claude-sonnet-4"
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
-	model := llm.NewOpenRouter(logger, m.openRouterKey, m.openRouterModel)
+	model := m.createModelInstance(m.openRouterModel)
 	m.registerTools(model)
 	m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
 	m.agent.SetSystem(m.mode.system)
@@ -760,10 +760,24 @@ func (m *Model) handleModelSlashCommand(args []string) {
 	for _, id := range m.listModels() {
 		if m.getModelSlug(id) == args[0] {
 			m.openRouterModel = id
-			model := llm.NewOpenRouter(m.logger, m.openRouterKey, m.openRouterModel)
+			model := m.createModelInstance(m.openRouterModel)
 			m.registerTools(model)
 			m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
 			return
 		}
 	}
+}
+
+// createModelInstance creates the appropriate LLM model instance based on the model name
+func (m Model) createModelInstance(modelName string) llm.Model {
+	// Special case for devstral-small: restrict to Mistral provider only
+	if modelName == "mistralai/devstral-small" {
+		providerConfig := &llm.ProviderConfig{
+			Only: []string{"Mistral"},
+		}
+		return llm.NewOpenRouterWithProvider(m.logger, m.openRouterKey, modelName, providerConfig)
+	}
+	
+	// For all other models, use standard configuration without provider restrictions
+	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 }
