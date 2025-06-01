@@ -17,6 +17,7 @@ IKM is a terminal-based AI coding assistant featuring:
 - Code style preferences:
   - Always match the code style of the surrounding code, including comment style and whitespace.
   - Use lowercase comments unless uppercase is justified (e.g., proper nouns, acronyms).
+  - Never add function or package comments.
 
 ## High-level architecture
 

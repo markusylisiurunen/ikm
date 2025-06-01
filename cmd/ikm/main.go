@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"regexp"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,24 @@ var devPrompt string
 
 //go:embed prompts/raw.txt
 var rawPrompt string
+
+func filterPromptForDisabledTools(prompt string, disabledTools []string) string {
+	toolToHelpTag := map[string]string{
+		"bash":  "bash_tool_help",
+		"fs":    "fs_tool_help",
+		"llm":   "llm_tool_help",
+		"task":  "task_tool_help",
+		"think": "think_tool_help",
+	}
+	for _, tool := range disabledTools {
+		if helpTag, exists := toolToHelpTag[tool]; exists {
+			pattern := `<` + helpTag + `[^>]*>.*?</` + helpTag + `>`
+			re := regexp.MustCompile(`(?s)` + pattern)
+			prompt = re.ReplaceAllString(prompt, "")
+		}
+	}
+	return prompt
+}
 
 type config struct {
 	debug         bool
@@ -94,9 +113,9 @@ func main() {
 		log.Fatalf("invalid mode: %s, must be one of: agent, dev, raw", cfg.mode)
 	}
 	model := tui.Initial(debugLogger, cfg.openRouterKey, runInBashDocker,
-		tui.WithStaticMode("agent", agentPrompt),
-		tui.WithStaticMode("dev", devPrompt),
-		tui.WithStaticMode("raw", rawPrompt),
+		tui.WithStaticMode("agent", filterPromptForDisabledTools(agentPrompt, cfg.disabledTools)),
+		tui.WithStaticMode("dev", filterPromptForDisabledTools(devPrompt, cfg.disabledTools)),
+		tui.WithStaticMode("raw", filterPromptForDisabledTools(rawPrompt, cfg.disabledTools)),
 		tui.WithSetDefaultMode(cfg.mode),
 		tui.WithSetDefaultModel(cfg.model),
 		tui.WithDisabledTools(cfg.disabledTools),
