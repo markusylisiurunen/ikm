@@ -547,6 +547,7 @@ func (m Model) listModels() []string {
 		"openai/gpt-4.1-mini",
 		"openai/o3",
 		"openai/o4-mini-high",
+		"qwen/qwen3-32b",
 	}
 }
 
@@ -574,6 +575,8 @@ func (m Model) getModelSlug(model string) string {
 		return "o3"
 	case "openai/o4-mini-high":
 		return "o4-mini-high"
+	case "qwen/qwen3-32b":
+		return "qwen3-32b"
 	default:
 		return ""
 	}
@@ -773,6 +776,11 @@ func (m Model) createModelInstance(modelName string) llm.Model {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
 			llm.WithOpenRouterOnlyProviders([]string{"Mistral"}),
 			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
+		)
+	}
+	if modelName == "qwen/qwen3-32b" {
+		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+			llm.WithOpenRouterOnlyProviders([]string{"Cerebras"}),
 		)
 	}
 	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
