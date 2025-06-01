@@ -772,6 +772,7 @@ func (m Model) createModelInstance(modelName string) llm.Model {
 	if modelName == "mistralai/devstral-small" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
 			llm.WithOpenRouterOnlyProviders([]string{"Mistral"}),
+			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
 		)
 	}
 	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)

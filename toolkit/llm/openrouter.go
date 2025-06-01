@@ -121,12 +121,7 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 							return fmt.Errorf("tool %s not found", toolCall.Function.Name)
 						}
 						result, err := tool.Call(gctx, toolCall.Function.Args)
-						// Transform the ID to match what will be sent to the API
-						transformedID := toolCall.ID
-						if config.idTransform != nil {
-							transformedID = config.idTransform(toolCall.ID)
-						}
-						toolResultEvents[idx] = &ToolResultEvent{ID: transformedID, Result: result, Error: err}
+						toolResultEvents[idx] = &ToolResultEvent{ID: toolCall.ID, Result: result, Error: err}
 						return nil
 					})
 				}
@@ -140,15 +135,10 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 						return
 					}
 					ch <- event
-					// Transform the ID to match what will be sent to the API
-					transformedID := messages[0].ToolCalls[idx].ID
-					if config.idTransform != nil {
-						transformedID = config.idTransform(messages[0].ToolCalls[idx].ID)
-					}
 					msg := Message{
 						Role:       RoleTool,
 						Name:       messages[0].ToolCalls[idx].Function.Name,
-						ToolCallID: transformedID,
+						ToolCallID: messages[0].ToolCalls[idx].ID,
 					}
 					if event.Error != nil {
 						msg.Content = ContentParts{NewTextContentPart("Error: " + event.Error.Error())}
