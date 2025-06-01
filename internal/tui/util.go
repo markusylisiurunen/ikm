@@ -9,24 +9,60 @@ func wrapLine(s string, width int) []string {
 	if width <= 0 {
 		return []string{s}
 	}
-	var b strings.Builder
-	curlen := 0
-	words := strings.Split(s, " ")
-	for i, word := range words {
+	var result []string
+	var curline strings.Builder
+	var curlen int = 0
+	for i, word := range strings.Split(s, " ") {
 		wlen := utf8.RuneCountInString(word)
 		if i == 0 {
-			b.WriteString(word)
-			curlen += wlen
+			if wlen <= width {
+				curline.WriteString(word)
+				curlen += wlen
+			} else {
+				lines := splitLongWord(word, width)
+				result = append(result, lines[:len(lines)-1]...)
+				curline.WriteString(lines[len(lines)-1])
+				curlen = utf8.RuneCountInString(lines[len(lines)-1])
+			}
 		} else if curlen+1+wlen <= width {
-			b.WriteByte(' ')
-			b.WriteString(word)
+			curline.WriteByte(' ')
+			curline.WriteString(word)
 			curlen += 1 + wlen
 		} else {
-			b.WriteString("\n" + word)
-			curlen = wlen
+			result = append(result, curline.String())
+			curline.Reset()
+			if wlen <= width {
+				curline.WriteString(word)
+				curlen = wlen
+			} else {
+				lines := splitLongWord(word, width)
+				result = append(result, lines[:len(lines)-1]...)
+				curline.WriteString(lines[len(lines)-1])
+				curlen = utf8.RuneCountInString(lines[len(lines)-1])
+			}
 		}
 	}
-	return strings.Split(b.String(), "\n")
+	if curline.Len() > 0 {
+		result = append(result, curline.String())
+	}
+	return result
+}
+
+func splitLongWord(word string, width int) []string {
+	if width <= 0 {
+		return []string{word}
+	}
+	var lines []string
+	runes := []rune(word)
+	for len(runes) > 0 {
+		if len(runes) <= width {
+			lines = append(lines, string(runes))
+			break
+		}
+		lines = append(lines, string(runes[:width]))
+		runes = runes[width:]
+	}
+	return lines
 }
 
 func wrapWithPrefix(s string, prefix string, width int) string {
