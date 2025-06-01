@@ -788,9 +788,9 @@ func (m Model) createModelInstance(modelName string) llm.Model {
 
 func (m Model) configureAgentModel(modelName string, model llm.Model) {
 	if modelName == "qwen/qwen3-32b" {
-		// for whatever reason, OpenRouter and/or Cerebras fails with the 32,768 max tokens even though it is documented to work
+		// the context window is only 32,768 tokens, so the output tokens must be significantly lower
 		m.agent.SetModel(model,
-			llm.WithMaxTokens(30_000),
+			llm.WithMaxTokens(8_192),
 			llm.WithReasoningEffortHigh(),
 		)
 		return
