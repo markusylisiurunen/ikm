@@ -148,7 +148,7 @@ func Initial(
 	m.agent = agent.New(logger, []llm.Tool{})
 	model := m.createModelInstance(m.openRouterModel)
 	m.registerTools(model)
-	m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
+	m.configureAgentModel(m.openRouterModel, model)
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
 	// init the viewport
@@ -765,7 +765,7 @@ func (m *Model) handleModelSlashCommand(args []string) {
 			m.openRouterModel = id
 			model := m.createModelInstance(m.openRouterModel)
 			m.registerTools(model)
-			m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
+			m.configureAgentModel(m.openRouterModel, model)
 			return
 		}
 	}
@@ -774,14 +774,29 @@ func (m *Model) handleModelSlashCommand(args []string) {
 func (m Model) createModelInstance(modelName string) llm.Model {
 	if modelName == "mistralai/devstral-small" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
-			llm.WithOpenRouterOrderProviders([]string{"mistral"}, false),
+			llm.WithOpenRouterOrderProviders([]string{"Mistral"}, false),
 			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
 		)
 	}
 	if modelName == "qwen/qwen3-32b" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
-			llm.WithOpenRouterOrderProviders([]string{"cerebras"}, false),
+			llm.WithOpenRouterOrderProviders([]string{"Cerebras"}, false),
 		)
 	}
 	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+}
+
+func (m Model) configureAgentModel(modelName string, model llm.Model) {
+	if modelName == "qwen/qwen3-32b" {
+		// for whatever reason, OpenRouter and/or Cerebras fails with the 32,768 max tokens even though it is documented to work
+		m.agent.SetModel(model,
+			llm.WithMaxTokens(30_000),
+			llm.WithReasoningEffortHigh(),
+		)
+		return
+	}
+	m.agent.SetModel(model,
+		llm.WithMaxTokens(32_768),
+		llm.WithReasoningEffortHigh(),
+	)
 }
