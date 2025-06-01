@@ -141,6 +141,7 @@ func Initial(
 	model.Register(tool.NewFS().SetLogger(logger))
 	model.Register(tool.NewLLM(m.openRouterKey).SetLogger(logger))
 	model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(logger))
+	model.Register(tool.NewThink().SetLogger(logger))
 	m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
@@ -278,6 +279,8 @@ func (m Model) renderContent() string {
 					s += m.renderToolLLM(call.Function.Args)
 				case "task":
 					s += m.renderToolTask(call.Function.Args)
+				case "think":
+					s += m.renderToolThink(call.Function.Args)
 				}
 			}
 		}
@@ -450,6 +453,17 @@ func (m Model) renderToolTask(args string) string {
 		fields["task"] = taskLine
 	}
 	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolThink(args string) string {
+	thought := gjson.Get(args, "thought").String()
+	if thought == "" {
+		return ""
+	}
+	var s string
+	s += "\n"
+	s += color.New(color.Faint).Sprint(wrapWithPrefix(thought, "  ", m.viewport.Width))
+	return s
 }
 
 func (m Model) renderFooter() string {
@@ -629,6 +643,7 @@ func (m *Model) handleModelSlashCommand(args []string) {
 			model.Register(tool.NewFS().SetLogger(m.logger))
 			model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
 			model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(m.logger))
+			model.Register(tool.NewThink().SetLogger(m.logger))
 			m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
 			return
 		}

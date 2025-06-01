@@ -131,8 +131,9 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 	t.logger.Debug("executing task with effort %q and model %q: %s", effort, modelName, desc)
 	reporter := &writeReportTool{}
 	model := llm.NewOpenRouter(t.logger, t.openRouterToken, modelName)
-	model.Register(NewFS())
-	model.Register(NewLLM(t.openRouterToken))
+	model.Register(NewFS().SetLogger(t.logger))
+	model.Register(NewLLM(t.openRouterToken).SetLogger(t.logger))
+	model.Register(NewThink().SetLogger(t.logger))
 	model.Register(reporter)
 	history := []llm.Message{
 		t.systemMessage(),

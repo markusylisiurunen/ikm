@@ -57,3 +57,7 @@ Example use cases where the `llm` tool is helpful:
 - Processing visual content, such as images or diagrams.
 - Obtaining expert opinions.
 </llm_tool_help>
+
+<think_tool_help description="Refer to this section for help on using the think tool.">
+The `think` tool is your private reasoning space. Use it whenever you need to think through problems, analyze requests, or plan your approach before responding. Use this tool liberally, thoughtful internal reasoning leads to better, more helpful responses.
+</think_tool_help>
