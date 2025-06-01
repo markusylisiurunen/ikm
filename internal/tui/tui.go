@@ -774,13 +774,13 @@ func (m *Model) handleModelSlashCommand(args []string) {
 func (m Model) createModelInstance(modelName string) llm.Model {
 	if modelName == "mistralai/devstral-small" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
-			llm.WithOpenRouterOnlyProviders([]string{"Mistral"}),
+			llm.WithOpenRouterOrderProviders([]string{"mistral"}, false),
 			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
 		)
 	}
 	if modelName == "qwen/qwen3-32b" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
-			llm.WithOpenRouterOnlyProviders([]string{"Cerebras"}),
+			llm.WithOpenRouterOrderProviders([]string{"cerebras"}, false),
 		)
 	}
 	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
