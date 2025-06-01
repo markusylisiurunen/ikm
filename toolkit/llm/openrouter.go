@@ -20,7 +20,7 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
-type openRouterOption func(*OpenRouter)
+type OpenRouterOption func(*OpenRouter)
 
 type OpenRouter struct {
 	logger     logger.Logger
@@ -31,7 +31,7 @@ type OpenRouter struct {
 	transforms []openRouterRequestTransform
 }
 
-func WithOpenRouterOnlyProviders(only []string) openRouterOption {
+func WithOpenRouterOnlyProviders(only []string) OpenRouterOption {
 	return func(o *OpenRouter) {
 		o.provider = &openRouter_Request_Provider{
 			Only: only,
@@ -39,7 +39,7 @@ func WithOpenRouterOnlyProviders(only []string) openRouterOption {
 	}
 }
 
-func WithOpenRouterOrderProviders(order []string, allowFallbacks bool) openRouterOption {
+func WithOpenRouterOrderProviders(order []string, allowFallbacks bool) OpenRouterOption {
 	return func(o *OpenRouter) {
 		o.provider = &openRouter_Request_Provider{
 			Order:          order,
@@ -48,7 +48,7 @@ func WithOpenRouterOrderProviders(order []string, allowFallbacks bool) openRoute
 	}
 }
 
-func WithOpenRouterRequestTransform(transform openRouterRequestTransform) openRouterOption {
+func WithOpenRouterRequestTransform(transform openRouterRequestTransform) OpenRouterOption {
 	return func(o *OpenRouter) {
 		if transform != nil {
 			o.transforms = append(o.transforms, transform)
@@ -56,7 +56,7 @@ func WithOpenRouterRequestTransform(transform openRouterRequestTransform) openRo
 	}
 }
 
-func NewOpenRouter(logger logger.Logger, token, model string, opts ...openRouterOption) *OpenRouter {
+func NewOpenRouter(logger logger.Logger, token, model string, opts ...OpenRouterOption) *OpenRouter {
 	o := &OpenRouter{logger: logger, token: token, model: model}
 	for _, opt := range opts {
 		opt(o)
@@ -624,12 +624,16 @@ func (t openRouterHexadecimalToolCallIDRequestTransform) transformMessage(msg *o
 	switch msg.Role {
 	case "assistant":
 		for i, toolCall := range msg.ToolCalls {
-			id := t.getID(toolCall.ID)
-			msg.ToolCalls[i].ID = id
+			if toolCall.ID != "" {
+				id := t.getID(toolCall.ID)
+				msg.ToolCalls[i].ID = id
+			}
 		}
 	case "tool":
-		id := t.getID(*msg.ToolCallID)
-		msg.ToolCallID = &id
+		if msg.ToolCallID != nil && *msg.ToolCallID != "" {
+			id := t.getID(*msg.ToolCallID)
+			msg.ToolCallID = &id
+		}
 	}
 }
 
