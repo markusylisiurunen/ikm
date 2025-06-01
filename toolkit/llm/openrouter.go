@@ -18,15 +18,40 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
+// ProviderConfig allows limiting OpenRouter requests to specific providers
+type ProviderConfig struct {
+	// Only restricts requests to specific providers (e.g., ["anthropic", "openai"])
+	Only []string
+	// Order specifies the preferred order of providers to try
+	Order []string
+	// AllowFallbacks determines if other providers can be used when Order is specified
+	// If false, only providers in Order will be used
+	AllowFallbacks *bool
+}
+
 type OpenRouter struct {
-	logger logger.Logger
-	token  string
-	model  string
-	tools  []Tool
+	logger   logger.Logger
+	token    string
+	model    string
+	tools    []Tool
+	provider *openRouter_Request_Provider
 }
 
 func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
 	return &OpenRouter{logger: logger, token: token, model: model}
+}
+
+// NewOpenRouterWithProvider creates a new OpenRouter instance with provider configuration
+func NewOpenRouterWithProvider(logger logger.Logger, token, model string, provider *ProviderConfig) *OpenRouter {
+	o := &OpenRouter{logger: logger, token: token, model: model}
+	if provider != nil {
+		o.provider = &openRouter_Request_Provider{
+			Only:          provider.Only,
+			Order:         provider.Order,
+			AllowFallback: provider.AllowFallbacks,
+		}
+	}
+	return o
 }
 
 func (o *OpenRouter) Register(tool Tool) {
@@ -238,6 +263,7 @@ func (o *OpenRouter) request(
 		MaxTokens:   config.maxTokens,
 		Messages:    []openRouter_Message{},
 		Model:       o.model,
+		Provider:    o.provider,
 		Reasoning:   nil,
 		Stream:      true,
 		Temperature: config.temperature,
@@ -513,10 +539,17 @@ type openRouter_Request_Usage struct {
 	Include bool `json:"include"`
 }
 
+type openRouter_Request_Provider struct {
+	Only          []string `json:"only,omitempty"`
+	Order         []string `json:"order,omitempty"`
+	AllowFallback *bool    `json:"allow_fallbacks,omitempty"`
+}
+
 type openRouter_Request struct {
 	MaxTokens   int                           `json:"max_tokens"`
 	Messages    []openRouter_Message          `json:"messages"`
 	Model       string                        `json:"model"`
+	Provider    *openRouter_Request_Provider  `json:"provider,omitempty"`
 	Reasoning   *openRouter_Request_Reasoning `json:"reasoning,omitempty"`
 	Stream      bool                          `json:"stream"`
 	Temperature float64                       `json:"temperature"`
