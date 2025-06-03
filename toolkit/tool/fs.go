@@ -60,7 +60,7 @@ func (t *fsListTool) Spec() (string, string, json.RawMessage) {
 		"properties": {
 			"path": {
 				"type": "string",
-				"description": "The absolute path to the directory to list (must be absolute, not relative)."
+				"description": "The absolute path to the directory to list"
 			}
 		},
 		"required": ["path"]
@@ -172,15 +172,15 @@ func (t *fsReadTool) Spec() (string, string, json.RawMessage) {
 		"properties": {
 			"path": {
 				"type": "string",
-				"description": "The absolute path to the file to read."
+				"description": "The absolute path to the file to read"
 			},
 			"offset": {
 				"type": "number",
-				"description": "The line number to start reading from (1-based). Only provide if the file is too large to read at once."
+				"description": "The line number to start reading from (1-based). Only provide if the file is too large to read at once"
 			},
 			"limit": {
 				"type": "number",
-				"description": "The number of lines to read. Only provide if the file is too large to read at once."
+				"description": "The number of lines to read. Only provide if the file is too large to read at once"
 			}
 		},
 		"required": ["path"]
@@ -239,7 +239,9 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 	// add line numbers to the output
 	content := stdout.String()
 	if content != "" {
-		lines := strings.Split(strings.TrimRight(content, "\n"), "\n") // FIXME: handle trailing newline correctly
+		// preserve whether the original content had a trailing newline
+		hasTrailingNewline := strings.HasSuffix(content, "\n")
+		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 		numberedLines := make([]string, len(lines))
 		startLine := 1
 		if offset > 0 {
@@ -249,7 +251,7 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 			numberedLines[i] = fmt.Sprintf("%6d\t%s", startLine+i, line)
 		}
 		content = strings.Join(numberedLines, "\n")
-		if len(lines) > 0 {
+		if hasTrailingNewline {
 			content += "\n"
 		}
 	}
@@ -299,11 +301,11 @@ func (t *fsWriteTool) Spec() (string, string, json.RawMessage) {
 		"properties": {
 			"path": {
 				"type": "string",
-				"description": "The absolute path to the file to write (must be absolute, not relative)."
+				"description": "The absolute path to the file to write"
 			},
 			"content": {
 				"type": "string",
-				"description": "The content to write to the file."
+				"description": "The content to write to the file"
 			}
 		},
 		"required": ["path", "content"]
@@ -389,19 +391,19 @@ func (t *fsReplaceTool) Spec() (string, string, json.RawMessage) {
 		"properties": {
 			"path": {
 				"type": "string",
-				"description": "The absolute path to the file to modify."
+				"description": "The absolute path to the file to modify"
 			},
 			"old_string": {
 				"type": "string",
-				"description": "The text to replace."
+				"description": "The text to replace"
 			},
 			"new_string": {
 				"type": "string",
-				"description": "The text to replace it with (must be different from old_string)."
+				"description": "The text to replace it with (must be different from old_string)"
 			},
 			"replace_all": {
 				"type": "boolean",
-				"description": "Replace all occurences of old_string (default false)."
+				"description": "Replace all occurrences of old_string (default false)"
 			}
 		},
 		"required": ["path", "old_string", "new_string"]
@@ -421,6 +423,10 @@ func (t *fsReplaceTool) Call(ctx context.Context, args string) (string, error) {
 	if oldStr == "" {
 		t.logger.Error("fs_replace operation failed: old_string parameter is required")
 		return fsReplaceToolResult{Error: "old_string parameter is required"}.result()
+	}
+	if oldStr == newStr {
+		t.logger.Error("fs_replace operation failed: old_string and new_string must be different")
+		return fsReplaceToolResult{Error: "old_string and new_string must be different"}.result()
 	}
 	absPath, err := validatePath(filePath)
 	if err != nil {
