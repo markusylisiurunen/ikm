@@ -22,10 +22,16 @@ var devPrompt string
 //go:embed prompts/raw.txt
 var rawPrompt string
 
+func injectVariablesToPrompt(prompt string, variables map[string]string) string {
+	for key, value := range variables {
+		prompt = regexp.MustCompile(`{{\s?`+key+`\s?}}`).ReplaceAllString(prompt, value)
+	}
+	return prompt
+}
+
 func filterPromptForDisabledTools(prompt string, disabledTools []string) string {
 	toolToHelpTag := map[string]string{
 		"bash":  "bash_tool_help",
-		"fs":    "fs_tool_help",
 		"llm":   "llm_tool_help",
 		"task":  "task_tool_help",
 		"think": "think_tool_help",
@@ -112,10 +118,14 @@ func main() {
 	if cfg.mode != "agent" && cfg.mode != "dev" && cfg.mode != "raw" {
 		log.Fatalf("invalid mode: %s, must be one of: agent, dev, raw", cfg.mode)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("error getting current working directory: %v", err)
+	}
 	model := tui.Initial(debugLogger, cfg.openRouterKey, runInBashDocker,
-		tui.WithStaticMode("agent", filterPromptForDisabledTools(agentPrompt, cfg.disabledTools)),
-		tui.WithStaticMode("dev", filterPromptForDisabledTools(devPrompt, cfg.disabledTools)),
-		tui.WithStaticMode("raw", filterPromptForDisabledTools(rawPrompt, cfg.disabledTools)),
+		tui.WithStaticMode("agent", injectVariablesToPrompt(filterPromptForDisabledTools(agentPrompt, cfg.disabledTools), map[string]string{"cwd": cwd})),
+		tui.WithStaticMode("dev", injectVariablesToPrompt(filterPromptForDisabledTools(devPrompt, cfg.disabledTools), map[string]string{"cwd": cwd})),
+		tui.WithStaticMode("raw", injectVariablesToPrompt(filterPromptForDisabledTools(rawPrompt, cfg.disabledTools), map[string]string{"cwd": cwd})),
 		tui.WithSetDefaultMode(cfg.mode),
 		tui.WithSetDefaultModel(cfg.model),
 		tui.WithDisabledTools(cfg.disabledTools),

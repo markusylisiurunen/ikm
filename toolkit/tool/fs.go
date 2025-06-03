@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,19 +17,20 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// fs_list -----------------------------------------------------------------------------------------
+
 const (
-	fsToolMaxFileCount = 10000
-	fsToolMaxFileSize  = 10 * 1024 * 1024
+	fsListToolMaxFileCount = 10_000
 )
 
-type fsToolResult struct {
-	Ok      bool     `json:"ok"`
-	Error   string   `json:"error,omitzero"`
-	Files   []string `json:"files,omitzero"`
-	Content string   `json:"content,omitzero"`
+var _ llm.Tool = (*fsListTool)(nil)
+
+type fsListToolResult struct {
+	Error string   `json:"error,omitzero"`
+	Files []string `json:"files,omitzero"`
 }
 
-func (r fsToolResult) result() (string, error) {
+func (r fsListToolResult) result() (string, error) {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal result to JSON: %w", err)
@@ -36,210 +38,478 @@ func (r fsToolResult) result() (string, error) {
 	return string(b), nil
 }
 
-var fsToolDescription = strings.TrimSpace(`
-Perform file system operations within the current working directory.
-
-Operations:
-- list: List all files in the current working directory tracked by git (cached and untracked, excluding ignored files)
-- read: Read the contents of a file
-- write: Create or overwrite a file with new content (creates parent directories if needed)
-- remove: Delete a file
-`)
-
-var _ llm.Tool = (*fsTool)(nil)
-
-type fsTool struct {
+type fsListTool struct {
 	logger logger.Logger
 }
 
-func NewFS() *fsTool {
-	return &fsTool{
-		logger: logger.NoOp(),
-	}
+func NewFSList() *fsListTool {
+	return &fsListTool{logger.NoOp()}
 }
 
-func (t *fsTool) SetLogger(logger logger.Logger) *fsTool {
+func (t *fsListTool) SetLogger(logger logger.Logger) *fsListTool {
 	t.logger = logger
 	return t
 }
 
-func (t *fsTool) Spec() (string, string, json.RawMessage) {
-	return "fs", fsToolDescription, json.RawMessage(`{
+//go:embed fs_list.md
+var fsListToolDescription string
+
+func (t *fsListTool) Spec() (string, string, json.RawMessage) {
+	return "fs_list", strings.TrimSpace(fsListToolDescription), json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"op": {
-				"type": "string",
-				"enum": ["list", "read", "write", "remove"],
-				"description": "The operation to perform on the file system"
-			},
 			"path": {
 				"type": "string",
-				"description": "The relative file path for the operation (required for 'read', 'write', and 'remove' operations)"
-			},
-			"content": {
-				"type": "string",
-				"description": "The content to write to the file (required for 'write' operation)"
+				"description": "The absolute path to the directory to list (must be absolute, not relative)."
 			}
 		},
-		"required": ["op"]
+		"required": ["path"]
 	}`)
 }
 
-func (t *fsTool) Call(ctx context.Context, args string) (string, error) {
+func (t *fsListTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("fs tool called with invalid JSON arguments")
-		return fsToolResult{Ok: false, Error: "invalid JSON arguments"}.result()
+		t.logger.Error("fs_list tool called with invalid JSON arguments")
+		return fsListToolResult{Error: "invalid JSON arguments"}.result()
 	}
-	var (
-		operation = gjson.Get(args, "op").String()
-		result    string
-		err       error
-	)
-	switch operation {
-	case "list":
-		result, err = t.list(ctx, args)
-	case "read":
-		result, err = t.read(ctx, args)
-	case "write":
-		result, err = t.write(ctx, args)
-	case "remove":
-		result, err = t.remove(ctx, args)
-	default:
-		err = fmt.Errorf("unknown operation: %s", operation)
-	}
+	// validate the provided path
+	path := gjson.Get(args, "path").String()
+	absPath, err := validatePath(path)
 	if err != nil {
-		t.logger.Error("file system operation (%s) failed: %s", operation, err.Error())
-		return fsToolResult{Ok: false, Error: err.Error()}.result()
+		t.logger.Error("fs_list operation failed: %s", err.Error())
+		return fsListToolResult{Error: err.Error()}.result()
 	}
-	t.logger.Debug("file system operation (%s) for path %q succeeded", operation, gjson.Get(args, "path").String())
-	return result, nil
-}
-
-func (t *fsTool) list(ctx context.Context, _ string) (string, error) {
+	// check if the path exists and is a directory
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		t.logger.Error("fs_list operation failed: %s", err.Error())
+		return fsListToolResult{Error: fmt.Sprintf("failed to stat path: %s", err.Error())}.result()
+	}
+	if !fileInfo.IsDir() {
+		t.logger.Error("fs_list operation failed: path is not a directory")
+		return fsListToolResult{Error: "path must be a directory"}.result()
+	}
+	// change to the specified directory and run git ls-files
 	cmd := exec.CommandContext(ctx, "git", "ls-files", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = absPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return "", fmt.Errorf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())
+		t.logger.Error("fs_list operation failed: %s", stderr.String())
+		return fsListToolResult{Error: fmt.Sprintf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())}.result()
 	}
 	if err != nil {
-		return "", fmt.Errorf("command failed: %s", err.Error())
+		t.logger.Error("fs_list operation failed: %s", err.Error())
+		return fsListToolResult{Error: fmt.Sprintf("command failed: %s", err.Error())}.result()
 	}
+	// process the output
 	output := strings.TrimSpace(stdout.String())
 	if output == "" {
-		return fsToolResult{Ok: true, Files: []string{}}.result()
+		t.logger.Debug("fs_list operation succeeded: no files found")
+		return fsListToolResult{Files: []string{}}.result()
 	}
 	files := strings.Split(output, "\n")
-	if len(files) > fsToolMaxFileCount {
-		return "", fmt.Errorf("too many files to list: %d exceeds limit of %d", len(files), fsToolMaxFileCount)
+	if len(files) > fsListToolMaxFileCount {
+		err := fmt.Errorf("too many files to list: %d exceeds limit of %d", len(files), fsListToolMaxFileCount)
+		t.logger.Error("fs_list operation failed: %s", err.Error())
+		return fsListToolResult{Error: err.Error()}.result()
 	}
-	return fsToolResult{Ok: true, Files: files}.result()
+	// convert relative paths to absolute paths
+	absFiles := make([]string, 0, len(files))
+	for _, file := range files {
+		if file != "" {
+			absFile := filepath.Join(absPath, file)
+			absFiles = append(absFiles, absFile)
+		}
+	}
+	t.logger.Debug("fs_list operation succeeded: found %d files", len(absFiles))
+	return fsListToolResult{Files: absFiles}.result()
 }
 
-func (t *fsTool) read(ctx context.Context, args string) (string, error) {
-	filePath := gjson.Get(args, "path").String()
-	if filePath == "" {
-		return "", fmt.Errorf("path parameter is required for read operation")
-	}
-	cleanPath := filepath.Clean(filePath)
-	if strings.Contains(cleanPath, "..") {
-		return "", fmt.Errorf("path must not contain '..' sequences")
-	}
-	fileInfo, err := os.Stat(cleanPath)
+// fs_read -----------------------------------------------------------------------------------------
+
+const (
+	fsReadToolMaxFileSize = 10 * 1024 * 1024
+)
+
+var _ llm.Tool = (*fsReadTool)(nil)
+
+type fsReadToolResult struct {
+	Error   string `json:"error,omitzero"`
+	Content string `json:"content,omitzero"`
+}
+
+func (r fsReadToolResult) result() (string, error) {
+	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("failed to stat file: %s", err.Error())
+		return "", fmt.Errorf("failed to marshal result to JSON: %w", err)
 	}
-	if fileInfo.Size() > fsToolMaxFileSize {
-		return "", fmt.Errorf("file size exceeds limit of %d bytes", fsToolMaxFileSize)
+	return string(b), nil
+}
+
+type fsReadTool struct {
+	logger logger.Logger
+}
+
+func NewFSRead() *fsReadTool {
+	return &fsReadTool{logger.NoOp()}
+}
+
+func (t *fsReadTool) SetLogger(logger logger.Logger) *fsReadTool {
+	t.logger = logger
+	return t
+}
+
+//go:embed fs_read.md
+var fsReadToolDescription string
+
+func (t *fsReadTool) Spec() (string, string, json.RawMessage) {
+	return "fs_read", strings.TrimSpace(fsReadToolDescription), json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {
+				"type": "string",
+				"description": "The absolute path to the file to read."
+			},
+			"offset": {
+				"type": "number",
+				"description": "The line number to start reading from (1-based). Only provide if the file is too large to read at once."
+			},
+			"limit": {
+				"type": "number",
+				"description": "The number of lines to read. Only provide if the file is too large to read at once."
+			}
+		},
+		"required": ["path"]
+	}`)
+}
+
+func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
+	if !gjson.Valid(args) {
+		t.logger.Error("fs_read tool called with invalid JSON arguments")
+		return fsReadToolResult{Error: "invalid JSON arguments"}.result()
 	}
-	cmd := exec.CommandContext(ctx, "cat", cleanPath)
+	// validate the provided path and parameters
+	filePath := gjson.Get(args, "path").String()
+	offset := gjson.Get(args, "offset").Int()
+	limit := gjson.Get(args, "limit").Int()
+	absPath, err := validatePath(filePath)
+	if err != nil {
+		t.logger.Error("fs_read operation failed: %s", err.Error())
+		return fsReadToolResult{Error: err.Error()}.result()
+	}
+	// check if the file exists and is readable
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		t.logger.Error("fs_read operation failed: %s", err.Error())
+		return fsReadToolResult{Error: fmt.Sprintf("failed to stat file: %s", err.Error())}.result()
+	}
+	if fileInfo.Size() > fsReadToolMaxFileSize {
+		err := fmt.Errorf("file size exceeds limit of %d bytes", fsReadToolMaxFileSize)
+		t.logger.Error("fs_read operation failed: %s", err.Error())
+		return fsReadToolResult{Error: err.Error()}.result()
+	}
+	// read the file using appropriate command based on offset and limit
+	var cmd *exec.Cmd
+	if offset > 0 && limit > 0 {
+		cmd = exec.CommandContext(ctx, "sed", "-n", fmt.Sprintf("%d,%dp", offset, offset+limit-1), absPath)
+	} else if offset > 0 {
+		cmd = exec.CommandContext(ctx, "tail", "-n", fmt.Sprintf("+%d", offset), absPath)
+	} else if limit > 0 {
+		cmd = exec.CommandContext(ctx, "head", "-n", fmt.Sprintf("%d", limit), absPath)
+	} else {
+		cmd = exec.CommandContext(ctx, "cat", absPath)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return "", fmt.Errorf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())
+		t.logger.Error("fs_read operation failed: %s", stderr.String())
+		return fsReadToolResult{Error: fmt.Sprintf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())}.result()
 	}
 	if err != nil {
-		return "", fmt.Errorf("command failed: %s", err.Error())
+		t.logger.Error("fs_read operation failed: %s", err.Error())
+		return fsReadToolResult{Error: fmt.Sprintf("command failed: %s", err.Error())}.result()
 	}
-	return fsToolResult{Ok: true, Content: stdout.String()}.result()
+	// add line numbers to the output
+	content := stdout.String()
+	if content != "" {
+		lines := strings.Split(strings.TrimRight(content, "\n"), "\n") // FIXME: handle trailing newline correctly
+		numberedLines := make([]string, len(lines))
+		startLine := 1
+		if offset > 0 {
+			startLine = int(offset)
+		}
+		for i, line := range lines {
+			numberedLines[i] = fmt.Sprintf("%6d\t%s", startLine+i, line)
+		}
+		content = strings.Join(numberedLines, "\n")
+		if len(lines) > 0 {
+			content += "\n"
+		}
+	}
+	t.logger.Debug("fs_read operation for path %q succeeded", filePath)
+	return fsReadToolResult{Content: content}.result()
 }
 
-func (t *fsTool) write(_ context.Context, args string) (string, error) {
-	filePath := gjson.Get(args, "path").String()
-	if filePath == "" {
-		return "", fmt.Errorf("path parameter is required for write operation")
+// fs_write ----------------------------------------------------------------------------------------
+
+const (
+	fsWriteToolMaxFileSize = 10 * 1024 * 1024
+)
+
+var _ llm.Tool = (*fsWriteTool)(nil)
+
+type fsWriteToolResult struct {
+	Error string `json:"error,omitzero"`
+}
+
+func (r fsWriteToolResult) result() (string, error) {
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal result to JSON: %w", err)
 	}
+	return string(b), nil
+}
+
+type fsWriteTool struct {
+	logger logger.Logger
+}
+
+func NewFSWrite() *fsWriteTool {
+	return &fsWriteTool{logger.NoOp()}
+}
+
+func (t *fsWriteTool) SetLogger(logger logger.Logger) *fsWriteTool {
+	t.logger = logger
+	return t
+}
+
+//go:embed fs_write.md
+var fsWriteToolDescription string
+
+func (t *fsWriteTool) Spec() (string, string, json.RawMessage) {
+	return "fs_write", strings.TrimSpace(fsWriteToolDescription), json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {
+				"type": "string",
+				"description": "The absolute path to the file to write (must be absolute, not relative)."
+			},
+			"content": {
+				"type": "string",
+				"description": "The content to write to the file."
+			}
+		},
+		"required": ["path", "content"]
+	}`)
+}
+
+func (t *fsWriteTool) Call(ctx context.Context, args string) (string, error) {
+	if !gjson.Valid(args) {
+		t.logger.Error("fs_write tool called with invalid JSON arguments")
+		return fsWriteToolResult{Error: "invalid JSON arguments"}.result()
+	}
+	// validate the provided path and content
+	filePath := gjson.Get(args, "path").String()
 	content := gjson.Get(args, "content").String()
 	if content == "" {
-		return "", fmt.Errorf("content parameter is required for write operation")
+		t.logger.Error("fs_write operation failed: content parameter is required")
+		return fsWriteToolResult{Error: "content parameter is required"}.result()
 	}
-	if len(content) > fsToolMaxFileSize {
-		return "", fmt.Errorf("content size exceeds limit of %d bytes", fsToolMaxFileSize)
+	if len(content) > fsWriteToolMaxFileSize {
+		err := fmt.Errorf("content size exceeds limit of %d bytes", fsWriteToolMaxFileSize)
+		t.logger.Error("fs_write operation failed: %s", err.Error())
+		return fsWriteToolResult{Error: err.Error()}.result()
 	}
-	cwd, err := os.Getwd()
+	absPath, err := validatePath(filePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %s", err.Error())
+		t.logger.Error("fs_write operation failed: %s", err.Error())
+		return fsWriteToolResult{Error: err.Error()}.result()
 	}
-	cleanPath := filepath.Clean(filePath)
-	if strings.Contains(cleanPath, "..") {
-		return "", fmt.Errorf("path must not contain '..' sequences")
-	}
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve absolute path: %s", err.Error())
-	}
-	relPath, err := filepath.Rel(cwd, absPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return "", fmt.Errorf("path must be within the current directory")
-	}
+	// make sure the parent directory exists
 	parentDir := filepath.Dir(absPath)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create parent directories: %s", err.Error())
+		t.logger.Error("fs_write operation failed: %s", err.Error())
+		return fsWriteToolResult{Error: fmt.Sprintf("failed to create parent directories: %s", err.Error())}.result()
 	}
+	// write the content to the file
 	if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %s", err.Error())
+		t.logger.Error("fs_write operation failed: %s", err.Error())
+		return fsWriteToolResult{Error: fmt.Sprintf("failed to write file: %s", err.Error())}.result()
 	}
-	return fsToolResult{Ok: true}.result()
+	t.logger.Debug("fs_write operation for path %q succeeded", filePath)
+	return fsWriteToolResult{}.result()
 }
 
-func (t *fsTool) remove(ctx context.Context, args string) (string, error) {
-	filePath := gjson.Get(args, "path").String()
-	if filePath == "" {
-		return "", fmt.Errorf("path parameter is required for remove operation")
-	}
-	cwd, err := os.Getwd()
+// fs_replace --------------------------------------------------------------------------------------
+
+const (
+	fsReplaceToolMaxFileSize = 10 * 1024 * 1024
+)
+
+var _ llm.Tool = (*fsReplaceTool)(nil)
+
+type fsReplaceToolResult struct {
+	Error string `json:"error,omitzero"`
+}
+
+func (r fsReplaceToolResult) result() (string, error) {
+	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %s", err.Error())
+		return "", fmt.Errorf("failed to marshal result to JSON: %w", err)
+	}
+	return string(b), nil
+}
+
+type fsReplaceTool struct {
+	logger logger.Logger
+}
+
+func NewFSReplace() *fsReplaceTool {
+	return &fsReplaceTool{logger.NoOp()}
+}
+
+func (t *fsReplaceTool) SetLogger(logger logger.Logger) *fsReplaceTool {
+	t.logger = logger
+	return t
+}
+
+//go:embed fs_replace.md
+var fsReplaceToolDescription string
+
+func (t *fsReplaceTool) Spec() (string, string, json.RawMessage) {
+	return "fs_replace", strings.TrimSpace(fsReplaceToolDescription), json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {
+				"type": "string",
+				"description": "The absolute path to the file to modify."
+			},
+			"old_string": {
+				"type": "string",
+				"description": "The text to replace."
+			},
+			"new_string": {
+				"type": "string",
+				"description": "The text to replace it with (must be different from old_string)."
+			},
+			"replace_all": {
+				"type": "boolean",
+				"description": "Replace all occurences of old_string (default false)."
+			}
+		},
+		"required": ["path", "old_string", "new_string"]
+	}`)
+}
+
+func (t *fsReplaceTool) Call(ctx context.Context, args string) (string, error) {
+	if !gjson.Valid(args) {
+		t.logger.Error("fs_replace tool called with invalid JSON arguments")
+		return fsReplaceToolResult{Error: "invalid JSON arguments"}.result()
+	}
+	// validate the provided path and parameters
+	filePath := gjson.Get(args, "path").String()
+	oldStr := gjson.Get(args, "old_string").String()
+	newStr := gjson.Get(args, "new_string").String()
+	replaceAll := gjson.Get(args, "replace_all").Bool()
+	if oldStr == "" {
+		t.logger.Error("fs_replace operation failed: old_string parameter is required")
+		return fsReplaceToolResult{Error: "old_string parameter is required"}.result()
+	}
+	absPath, err := validatePath(filePath)
+	if err != nil {
+		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		return fsReplaceToolResult{Error: err.Error()}.result()
+	}
+	// check if the file exists and is readable
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		return fsReplaceToolResult{Error: fmt.Sprintf("failed to stat file: %s", err.Error())}.result()
+	}
+	if fileInfo.Size() > fsReplaceToolMaxFileSize {
+		err := fmt.Errorf("file size exceeds limit of %d bytes", fsReplaceToolMaxFileSize)
+		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		return fsReplaceToolResult{Error: err.Error()}.result()
+	}
+	// read the file content
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		return fsReplaceToolResult{Error: fmt.Sprintf("failed to read file: %s", err.Error())}.result()
+	}
+	contentStr := string(content)
+	// replace the old string with the new string (if valid)
+	if !replaceAll {
+		occurrences := strings.Count(contentStr, oldStr)
+		if occurrences == 0 {
+			err := fmt.Errorf("old_string not found in file")
+			t.logger.Error("fs_replace operation failed: %s", err.Error())
+			return fsReplaceToolResult{Error: err.Error()}.result()
+		}
+		if occurrences > 1 {
+			err := fmt.Errorf("old_string appears %d times in file, must be unique for single replacement", occurrences)
+			t.logger.Error("fs_replace operation failed: %s", err.Error())
+			return fsReplaceToolResult{Error: err.Error()}.result()
+		}
+	}
+	var newContent string
+	if replaceAll {
+		newContent = strings.ReplaceAll(contentStr, oldStr, newStr)
+	} else {
+		newContent = strings.Replace(contentStr, oldStr, newStr, 1)
+	}
+	// write the modified content back to the file
+	if len(newContent) > fsReplaceToolMaxFileSize {
+		err := fmt.Errorf("new content size exceeds limit of %d bytes", fsReplaceToolMaxFileSize)
+		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		return fsReplaceToolResult{Error: err.Error()}.result()
+	}
+	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		return fsReplaceToolResult{Error: fmt.Sprintf("failed to write file: %s", err.Error())}.result()
+	}
+	t.logger.Debug("fs_replace operation for path %q succeeded", filePath)
+	return fsReplaceToolResult{}.result()
+}
+
+// helpers -----------------------------------------------------------------------------------------
+
+func validatePath(filePath string) (string, error) {
+	if filePath == "" {
+		return "", fmt.Errorf("path parameter is required")
 	}
 	cleanPath := filepath.Clean(filePath)
-	if strings.Contains(cleanPath, "..") {
-		return "", fmt.Errorf("path must not contain '..' sequences")
+	// convert to absolute path if not already absolute
+	var absPath string
+	var err error
+	if filepath.IsAbs(cleanPath) {
+		absPath = cleanPath
+	} else {
+		absPath, err = filepath.Abs(cleanPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve absolute path: %s", err.Error())
+		}
 	}
-	absPath, err := filepath.Abs(cleanPath)
+	// get current working directory
+	cwd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve absolute path: %s", err.Error())
+		return "", fmt.Errorf("failed to get current working directory: %s", err.Error())
 	}
+	// ensure the absolute path is within the current working directory
 	relPath, err := filepath.Rel(cwd, absPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return "", fmt.Errorf("path must be within the current directory")
-	}
-	cmd := exec.CommandContext(ctx, "rm", absPath)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return "", fmt.Errorf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())
-	}
 	if err != nil {
-		return "", fmt.Errorf("command failed: %s", err.Error())
+		return "", fmt.Errorf("failed to determine relative path: %s", err.Error())
 	}
-	return fsToolResult{Ok: true}.result()
+	// check if the path tries to escape the current working directory
+	if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("path must be within the current working directory")
+	}
+	return absPath, nil
 }

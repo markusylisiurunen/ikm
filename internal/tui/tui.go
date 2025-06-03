@@ -177,7 +177,10 @@ func (m Model) registerTools(model llm.Model) {
 		m.logger.Debug("skipped disabled tool: bash")
 	}
 	if !m.isToolDisabled("fs") {
-		model.Register(tool.NewFS().SetLogger(m.logger))
+		model.Register(tool.NewFSList().SetLogger(m.logger))
+		model.Register(tool.NewFSRead().SetLogger(m.logger))
+		model.Register(tool.NewFSReplace().SetLogger(m.logger))
+		model.Register(tool.NewFSWrite().SetLogger(m.logger))
 	} else {
 		m.logger.Debug("skipped disabled tool: fs")
 	}

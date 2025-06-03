@@ -1,0 +1,1 @@
+Recursively lists git-tracked files and directories in a given path. The path parameter must be an absolute path, not a relative path. You should generally prefer the bash tool, if you know which directories to search or which files you want to find.

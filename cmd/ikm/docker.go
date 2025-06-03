@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -14,6 +15,10 @@ import (
 var bashDockerImageTag string
 
 func buildBashDockerIfNeeded() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current working directory: %s", err.Error())
+	}
 	baseImage := "ubuntu:noble"
 	cmdsToExecute := []string{
 		"apt-get update",
@@ -42,7 +47,7 @@ func buildBashDockerIfNeeded() error {
 	tempContainerName := "ikm-" + fmt.Sprintf("%x", time.Now().Unix())
 	dockerCmds := [][]string{
 		{"docker", "pull", baseImage},
-		{"docker", "run", "-v", ".:/sandbox", "-w", "/sandbox", "--name", tempContainerName, baseImage, "/bin/bash", "-c", strings.Join(cmdsToExecute, " && ")},
+		{"docker", "run", "-v", fmt.Sprintf(".:%s", cwd), "-w", cwd, "--name", tempContainerName, baseImage, "/bin/bash", "-c", strings.Join(cmdsToExecute, " && ")},
 		{"docker", "commit", tempContainerName, bashDockerImageTag},
 		{"docker", "rm", tempContainerName},
 	}
@@ -58,9 +63,13 @@ func buildBashDockerIfNeeded() error {
 }
 
 func runInBashDocker(ctx context.Context, cmd string) (int, string, string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return 0, "", "", fmt.Errorf("failed to get current working directory: %s", err.Error())
+	}
 	dockerCmd := exec.CommandContext(ctx, "docker", "run", "--rm",
-		"-v", ".:/sandbox:ro",
-		"-w", "/sandbox",
+		"-v", fmt.Sprintf(".:%s:ro", cwd),
+		"-w", cwd,
 		"--network", "none",
 		bashDockerImageTag,
 		"bash", "-l", "-c", cmd)
@@ -70,7 +79,7 @@ func runInBashDocker(ctx context.Context, cmd string) (int, string, string, erro
 	if err := dockerCmd.Start(); err != nil {
 		return 0, "", "", fmt.Errorf("error executing command: %w", err)
 	}
-	err := dockerCmd.Wait()
+	err = dockerCmd.Wait()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), stdoutBuf.String(), stderrBuf.String(), nil
