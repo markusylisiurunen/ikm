@@ -25,5 +25,5 @@ go.work.sum
 .env
 
 # project
+./ikm
 .ikm/logs
-ikm
