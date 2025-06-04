@@ -421,6 +421,7 @@ func (m Model) renderToolFields(fields map[string]string) string {
 		"path",
 		"offset",
 		"limit",
+		"no line numbers",
 		"content",
 		"old string",
 		"new string",
@@ -475,6 +476,9 @@ func (m Model) renderToolFSRead(args string) string {
 	}
 	if limit := gjson.Get(args, "limit").Int(); limit > 0 {
 		fields["limit"] = fmt.Sprintf("%d", limit)
+	}
+	if noLineNumbers := gjson.Get(args, "no_line_numbers").Bool(); noLineNumbers {
+		fields["no line numbers"] = "true"
 	}
 	return m.renderToolFields(fields)
 }

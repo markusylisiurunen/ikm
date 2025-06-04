@@ -181,6 +181,10 @@ func (t *fsReadTool) Spec() (string, string, json.RawMessage) {
 			"limit": {
 				"type": "number",
 				"description": "The number of lines to read. Only provide if the file is too large to read at once"
+			},
+			"no_line_numbers": {
+				"type": "boolean",
+				"description": "If true, do not add line numbers to the output"
 			}
 		},
 		"required": ["path"]
@@ -196,6 +200,7 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 	filePath := gjson.Get(args, "path").String()
 	offset := gjson.Get(args, "offset").Int()
 	limit := gjson.Get(args, "limit").Int()
+	noLineNumbers := gjson.Get(args, "no_line_numbers").Bool()
 	absPath, err := validatePath(filePath)
 	if err != nil {
 		t.logger.Error("fs_read operation failed: %s", err.Error())
@@ -238,7 +243,7 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 	}
 	// add line numbers to the output
 	content := stdout.String()
-	if content != "" {
+	if content != "" && !noLineNumbers {
 		// preserve whether the original content had a trailing newline
 		hasTrailingNewline := strings.HasSuffix(content, "\n")
 		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
