@@ -26,4 +26,5 @@ go.work.sum
 
 # project
 ./ikm
+.claude*
 .ikm/logs

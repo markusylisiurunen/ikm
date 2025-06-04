@@ -314,8 +314,14 @@ func (m Model) renderContent() string {
 				switch call.Function.Name {
 				case "bash":
 					s += m.renderToolBash(call.Function.Args)
-				case "fs":
-					s += m.renderToolFS(call.Function.Args)
+				case "fs_list":
+					s += m.renderToolFSList(call.Function.Args)
+				case "fs_read":
+					s += m.renderToolFSRead(call.Function.Args)
+				case "fs_replace":
+					s += m.renderToolFSReplace(call.Function.Args)
+				case "fs_write":
+					s += m.renderToolFSWrite(call.Function.Args)
 				case "llm":
 					s += m.renderToolLLM(call.Function.Args)
 				case "task":
@@ -412,8 +418,13 @@ func (m Model) renderToolFields(fields map[string]string) string {
 	var parts []string
 	fieldOrder := []string{
 		"command",
-		"op",
 		"path",
+		"offset",
+		"limit",
+		"content",
+		"old string",
+		"new string",
+		"replace all",
 		"model",
 		"system prompt",
 		"user prompt",
@@ -445,14 +456,60 @@ func (m Model) renderToolBash(args string) string {
 	return m.renderToolFields(map[string]string{"command": cmd})
 }
 
-func (m Model) renderToolFS(args string) string {
-	op := gjson.Get(args, "op").String()
-	if op == "" {
+func (m Model) renderToolFSList(args string) string {
+	path := gjson.Get(args, "path").String()
+	if path == "" {
 		return ""
 	}
-	fields := map[string]string{"op": op}
-	if path := gjson.Get(args, "path").String(); path != "" {
-		fields["path"] = path
+	return m.renderToolFields(map[string]string{"path": path})
+}
+
+func (m Model) renderToolFSRead(args string) string {
+	path := gjson.Get(args, "path").String()
+	if path == "" {
+		return ""
+	}
+	fields := map[string]string{"path": path}
+	if offset := gjson.Get(args, "offset").Int(); offset > 0 {
+		fields["offset"] = fmt.Sprintf("%d", offset)
+	}
+	if limit := gjson.Get(args, "limit").Int(); limit > 0 {
+		fields["limit"] = fmt.Sprintf("%d", limit)
+	}
+	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolFSReplace(args string) string {
+	path := gjson.Get(args, "path").String()
+	oldString := gjson.Get(args, "old_string").String()
+	newString := gjson.Get(args, "new_string").String()
+	if path == "" {
+		return ""
+	}
+	fields := map[string]string{"path": path}
+	if oldString != "" {
+		fields["old string"] = fmt.Sprintf("%d chars", len(oldString))
+	}
+	if newString != "" {
+		fields["new string"] = fmt.Sprintf("%d chars", len(newString))
+	}
+	if replaceAll := gjson.Get(args, "replace_all").Bool(); replaceAll {
+		fields["replace all"] = "true"
+	} else {
+		fields["replace all"] = "false"
+	}
+	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolFSWrite(args string) string {
+	path := gjson.Get(args, "path").String()
+	content := gjson.Get(args, "content").String()
+	if path == "" {
+		return ""
+	}
+	fields := map[string]string{"path": path}
+	if content != "" {
+		fields["content"] = fmt.Sprintf("%d bytes", len(content))
 	}
 	return m.renderToolFields(fields)
 }
