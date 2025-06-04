@@ -190,7 +190,11 @@ func (m Model) registerTools(model llm.Model) {
 		m.logger.Debug("skipped disabled tool: llm")
 	}
 	if !m.isToolDisabled("task") {
-		model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(m.logger))
+		model.Register(tool.NewTask(
+			m.runInBashDocker,
+			m.openRouterKey,
+			m.fastButCapableModel, m.thoroughButCostlyModel,
+		).SetLogger(m.logger))
 	} else {
 		m.logger.Debug("skipped disabled tool: task")
 	}
@@ -432,7 +436,8 @@ func (m Model) renderToolFields(fields map[string]string) string {
 		"image files",
 		"pdf files",
 		"effort",
-		"task",
+		"prompt",
+		"agents",
 	}
 	for _, key := range fieldOrder {
 		if value, exists := fields[key]; exists && value != "" {
@@ -544,16 +549,19 @@ func (m Model) renderToolLLM(args string) string {
 
 func (m Model) renderToolTask(args string) string {
 	effort := gjson.Get(args, "effort").String()
-	task := gjson.Get(args, "task").String()
-	if effort == "" || task == "" {
+	prompt := gjson.Get(args, "prompt").String()
+	agentsData := gjson.Get(args, "agents")
+	if effort == "" || prompt == "" || !agentsData.Exists() || !agentsData.IsArray() {
 		return ""
 	}
 	fields := map[string]string{"effort": effort}
-	taskLines := strings.Split(task, "\n")
-	if len(taskLines) > 0 {
-		taskLine := strings.TrimSpace(taskLines[0])
-		fields["task"] = taskLine
+	promptLines := strings.Split(prompt, "\n")
+	if len(promptLines) > 0 {
+		promptLine := strings.TrimSpace(promptLines[0])
+		fields["prompt"] = promptLine
 	}
+	agentCount := len(agentsData.Array())
+	fields["agents"] = fmt.Sprintf("%d", agentCount)
 	return m.renderToolFields(fields)
 }
 
