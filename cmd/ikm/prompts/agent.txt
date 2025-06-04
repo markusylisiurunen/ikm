@@ -43,36 +43,6 @@ You MUST adhere to the following criteria when executing the task:
 
 ## Tool usage
 
-<bash_tool_help description="Refer to this section for help on using the bash tool.">
-The `bash` tool allows you to execute bash commands within a secure Ubuntu Noble sandbox environment, operating in the root directory of the current project. This is useful for exploring the codebase, running queries, or checking command outputs.
-
-Important constraints and permissions:
-- Read-only filesystem: The sandbox's filesystem is mounted read-only (`:ro`). You can run any standard Ubuntu command that only reads from the filesystem (e.g., `ls`, `nl`, `rg`, `sed` for viewing, `git status`, `git diff`, `git log`). Commands that attempt to modify files or directories (e.g., `sed -i`, `mv`, `rm`, `mkdir`, `git commit`) are not allowed and will fail.
-- Network disabled: Network access is disabled (`--network none`); you cannot connect to external resources or APIs (e.g., `curl`, `wget`, `git clone`, `git fetch`).
-
-When to use `bash` versus `fs`:
-- Use the `fs` tool for basic file system operations for which it provides a more structured interface.
-- If you need to do more complex operations not supported by `fs`, use the `bash` tool.
-
-Example commands (these are just common use cases; you may use any other read-only, non-network commands as needed):
-- Viewing files with line numbers:
-  - View an entire file with line numbers: `nl -ba -w1 <file>`
-  - View a specific range (e.g., lines 50-150): `nl -ba -w1 <file> | sed -n '50,150p'`
-  - View the first N lines: `nl -ba -w1 <file> | head -n <N>`
-  - View the last N lines: `nl -ba -w1 <file> | tail -n <N>`
-- Searching files (using `ripgrep` - preferred):
-  - `ripgrep` (`rg`) is generally recommended over `grep` due to its speed and convenient defaults. It also includes line numbers (`-n`) by default in most cases when outputting to the terminal.
-  - Find a pattern in a specific file: `rg -n '<pattern>' <file>`
-  - Find a pattern with context (3 lines before/after): `rg -n -C 3 '<pattern>' <file>`
-  - Find a pattern in all Go files within a directory: `rg -n -g "*.go" '<pattern>' <directory>`
-  - List files containing a pattern in a directory: `rg -l '<pattern>' <directory>`
-- Inspecting Git status (read-only):
-  - Show changes between working directory and index: `git diff`
-  - Show changes between index and HEAD: `git diff --cached`
-  - Show working tree status: `git status`
-  - Show commit history: `git log`
-</bash_tool_help>
-
 <task_tool_help description="Refer to this section for help on using the task tool.">
 The `task` tool launches an autonomous AI agent to complete self-contained tasks. The agent has file system access and will provide a detailed report of its work.
 
@@ -93,7 +63,3 @@ Example use cases where the `llm` tool is helpful:
 - Processing visual content, such as images or diagrams.
 - Obtaining expert opinions.
 </llm_tool_help>
-
-<think_tool_help description="Refer to this section for help on using the think tool.">
-The `think` tool is your private reasoning space. Use it whenever you need to think through problems, analyze requests, or plan your approach before responding. Use this tool liberally, thoughtful internal reasoning leads to better, more helpful responses.
-</think_tool_help>

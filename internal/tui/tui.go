@@ -446,7 +446,7 @@ func (m Model) renderToolFields(fields map[string]string) string {
 }
 
 func (m Model) renderToolBash(args string) string {
-	cmd := gjson.Get(args, "cmd").String()
+	cmd := gjson.Get(args, "command").String()
 	if cmd == "" {
 		return ""
 	}

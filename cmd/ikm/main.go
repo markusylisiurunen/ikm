@@ -31,10 +31,8 @@ func injectVariablesToPrompt(prompt string, variables map[string]string) string 
 
 func filterPromptForDisabledTools(prompt string, disabledTools []string) string {
 	toolToHelpTag := map[string]string{
-		"bash":  "bash_tool_help",
-		"llm":   "llm_tool_help",
-		"task":  "task_tool_help",
-		"think": "think_tool_help",
+		"llm":  "llm_tool_help",
+		"task": "task_tool_help",
 	}
 	for _, tool := range disabledTools {
 		if helpTag, exists := toolToHelpTag[tool]; exists {

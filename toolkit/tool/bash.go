@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -30,15 +31,6 @@ func (r bashToolResult) result() (string, error) {
 	return string(b), nil
 }
 
-var bashToolDescription = strings.TrimSpace(`
-Execute bash commands within a secure Ubuntu Noble sandbox environment, operating in the root directory of the current project.
-
-- Constraints: The sandbox has a read-only filesystem (files cannot be modified) and network access is disabled.
-- Permissions: You can run any command that only reads from the filesystem and does not require network access.
-- Examples: ls, nl -ba -w1, rg, sed (for viewing), git status, git diff, git log.
-- Prohibited: Commands attempting to modify files (sed -i, mv, rm, git commit) or access the network (curl, wget, git clone) will fail.
-`)
-
 var _ llm.Tool = (*bashTool)(nil)
 
 type bashTool struct {
@@ -47,10 +39,7 @@ type bashTool struct {
 }
 
 func NewBash(exec func(context.Context, string) (int, string, string, error)) *bashTool {
-	return &bashTool{
-		logger: logger.NoOp(),
-		exec:   exec,
-	}
+	return &bashTool{logger.NoOp(), exec}
 }
 
 func (t *bashTool) SetLogger(logger logger.Logger) *bashTool {
@@ -58,16 +47,19 @@ func (t *bashTool) SetLogger(logger logger.Logger) *bashTool {
 	return t
 }
 
+//go:embed bash.md
+var bashToolDescription string
+
 func (t *bashTool) Spec() (string, string, json.RawMessage) {
-	return "bash", bashToolDescription, json.RawMessage(`{
+	return "bash", strings.TrimSpace(bashToolDescription), json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"cmd": {
+			"command": {
 				"type": "string",
-				"description": "Bash command to execute"
+				"description": "The command to execute"
 			}
 		},
-		"required": ["cmd"]
+		"required": ["command"]
 	}`)
 }
 
@@ -76,7 +68,7 @@ func (t *bashTool) Call(ctx context.Context, args string) (string, error) {
 		t.logger.Error("bash tool called with invalid JSON arguments")
 		return bashToolResult{Ok: false, Error: "invalid JSON arguments"}.result()
 	}
-	cmd := gjson.Get(args, "cmd").String()
+	cmd := gjson.Get(args, "command").String()
 	if cmd == "" {
 		t.logger.Error("bash tool called without command")
 		return bashToolResult{Ok: false, Error: "command is required"}.result()
