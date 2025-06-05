@@ -219,6 +219,21 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 				return
 			}
 			if chunk.Usage != nil {
+				if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+					o.logger.Debug("OpenRouter usage: %d prompt tokens (cached: %d or %.2f), %d completion tokens, total cost: $%.6f",
+						chunk.Usage.PromptTokens,
+						chunk.Usage.PromptTokensDetails.CachedTokens,
+						float64(chunk.Usage.PromptTokensDetails.CachedTokens)/float64(chunk.Usage.PromptTokens),
+						chunk.Usage.CompletionTokens,
+						chunk.Usage.Cost,
+					)
+				} else {
+					o.logger.Debug("OpenRouter usage: %d prompt tokens, %d completion tokens, total cost: $%.6f",
+						chunk.Usage.PromptTokens,
+						chunk.Usage.CompletionTokens,
+						chunk.Usage.Cost,
+					)
+				}
 				ch <- &UsageEvent{Usage: Usage{
 					PromptTokens:     chunk.Usage.PromptTokens,
 					CompletionTokens: chunk.Usage.CompletionTokens,
@@ -290,6 +305,7 @@ func (o *OpenRouter) request(
 		}
 		payload.Messages = append(payload.Messages, m)
 	}
+	o.injectCacheControl(payload.Messages)
 	if config.reasoningEffort > 0 {
 		switch config.reasoningEffort {
 		case 1:
@@ -332,6 +348,32 @@ func (o *OpenRouter) request(
 	return client.Do(req)
 }
 
+func (o *OpenRouter) injectCacheControl(messages []openRouter_Message) {
+	lastSystemIdx := -1
+	lastUserIdx := -1
+	for i, msg := range messages {
+		switch msg.Role {
+		case "system":
+			lastSystemIdx = i
+		case "user":
+			lastUserIdx = i
+		}
+	}
+	if lastSystemIdx >= 0 {
+		o.addCacheControlToMessage(&messages[lastSystemIdx])
+	}
+	if lastUserIdx >= 0 {
+		o.addCacheControlToMessage(&messages[lastUserIdx])
+	}
+}
+
+func (o *OpenRouter) addCacheControlToMessage(msg *openRouter_Message) {
+	if len(msg.ContentParts) > 0 {
+		lastIdx := len(msg.ContentParts) - 1
+		msg.ContentParts[lastIdx].CacheControl = &openRouter_Message_ContentPart_CacheControl{Type: "ephemeral"}
+	}
+}
+
 func (o *OpenRouter) generationConfig(opts ...StreamOption) streamConfig {
 	c := streamConfig{
 		maxTokens:       8192,
@@ -359,6 +401,10 @@ type openRouter_Message_ToolCall struct {
 	Function *openRouter_Message_ToolCall_Function `json:"function,omitempty"`
 }
 
+type openRouter_Message_ContentPart_CacheControl struct {
+	Type string `json:"type"`
+}
+
 type openRouter_Message_ContentPart_ImageURL struct {
 	URL string `json:"url,omitzero"`
 }
@@ -377,10 +423,11 @@ func (f openRouter_Message_ContentPart_File) IsZero() bool {
 }
 
 type openRouter_Message_ContentPart struct {
-	Type     string                                  `json:"type"`
-	Text     string                                  `json:"text,omitzero"`
-	ImageURL openRouter_Message_ContentPart_ImageURL `json:"image_url,omitzero"`
-	File     openRouter_Message_ContentPart_File     `json:"file,omitzero"`
+	Type         string                                       `json:"type"`
+	Text         string                                       `json:"text,omitzero"`
+	ImageURL     openRouter_Message_ContentPart_ImageURL      `json:"image_url,omitzero"`
+	File         openRouter_Message_ContentPart_File          `json:"file,omitzero"`
+	CacheControl *openRouter_Message_ContentPart_CacheControl `json:"cache_control,omitempty"`
 }
 
 type openRouter_Message_ContentParts []openRouter_Message_ContentPart
@@ -587,15 +634,19 @@ type openRouter_Chunk_Error struct {
 	Metadata map[string]any `json:"metadata"`
 }
 
+type openRouter_Chunk_CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
 type openRouter_Chunk_PromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 type openRouter_Chunk_Usage struct {
-	CompletionTokens    int                                  `json:"completion_tokens"`
-	Cost                float64                              `json:"cost"`
-	PromptTokens        int                                  `json:"prompt_tokens"`
-	PromptTokensDetails openRouter_Chunk_PromptTokensDetails `json:"prompt_tokens_details"`
-	TotalTokens         int                                  `json:"total_tokens"`
+	CompletionTokens        int                                      `json:"completion_tokens"`
+	CompletionTokensDetails openRouter_Chunk_CompletionTokensDetails `json:"completion_tokens_details"`
+	Cost                    float64                                  `json:"cost"`
+	PromptTokens            int                                      `json:"prompt_tokens"`
+	PromptTokensDetails     openRouter_Chunk_PromptTokensDetails     `json:"prompt_tokens_details"`
+	TotalTokens             int                                      `json:"total_tokens"`
 }
 
 type openRouter_Chunk struct {
