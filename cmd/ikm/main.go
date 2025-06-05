@@ -62,6 +62,7 @@ func (c *config) read() {
 		noToolLLM   = flag.Bool("no-tool-llm", false, "disable the llm tool")
 		noToolTask  = flag.Bool("no-tool-task", false, "disable the task tool")
 		noToolThink = flag.Bool("no-tool-think", false, "disable the think tool")
+		noToolTodo  = flag.Bool("no-tool-todo", false, "disable the todo tool")
 	)
 	flag.Parse()
 	if *noToolBash {
@@ -78,6 +79,9 @@ func (c *config) read() {
 	}
 	if *noToolThink {
 		c.disabledTools = append(c.disabledTools, "think")
+	}
+	if *noToolTodo {
+		c.disabledTools = append(c.disabledTools, "todo")
 	}
 	c.debug = *debug
 	c.mode = *mode

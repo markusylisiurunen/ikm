@@ -203,6 +203,12 @@ func (m Model) registerTools(model llm.Model) {
 	} else {
 		m.logger.Debug("skipped disabled tool: think")
 	}
+	if !m.isToolDisabled("todo") {
+		model.Register(tool.NewTodoRead().SetLogger(m.logger))
+		model.Register(tool.NewTodoWrite().SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: todo")
+	}
 }
 
 func (m Model) isToolDisabled(toolName string) bool {
@@ -332,6 +338,10 @@ func (m Model) renderContent() string {
 					s += m.renderToolTask(call.Function.Args)
 				case "think":
 					s += m.renderToolThink(call.Function.Args)
+				case "todo_read":
+					s += m.renderToolTodoRead(call.Function.Args)
+				case "todo_write":
+					s += m.renderToolTodoWrite(call.Function.Args)
 				}
 			}
 		}
@@ -574,6 +584,49 @@ func (m Model) renderToolThink(args string) string {
 	s += "\n"
 	s += color.New(color.Faint).Sprint(wrapWithPrefix(thought, "  ", m.viewport.Width))
 	return s
+}
+
+func (m Model) renderToolTodoRead(_ string) string {
+	return ""
+}
+
+func (m Model) renderToolTodoWrite(args string) string {
+	todosData := gjson.Get(args, "todos")
+	if !todosData.Exists() || !todosData.IsArray() {
+		return ""
+	}
+	var todos []string
+	for _, todo := range todosData.Array() {
+		content := todo.Get("content").String()
+		status := todo.Get("status").String()
+		if content == "" || status == "" {
+			continue
+		}
+		var checkbox string
+		switch status {
+		case "completed":
+			checkbox = "[x]"
+		case "in_progress":
+			checkbox = "[~]"
+		default:
+			checkbox = "[ ]"
+		}
+		todoLine := fmt.Sprintf("  %s %s", checkbox, content)
+		if len(todoLine) > m.viewport.Width {
+			todoLine = todoLine[:m.viewport.Width-3] + "..."
+		}
+		switch status {
+		case "completed":
+			todoLine = color.New(color.FgGreen).Sprint(todoLine)
+		case "in_progress":
+			todoLine = color.New(color.FgYellow).Sprint(todoLine)
+		}
+		todos = append(todos, todoLine)
+	}
+	if len(todos) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(todos, "\n")
 }
 
 func (m Model) renderFooter() string {
