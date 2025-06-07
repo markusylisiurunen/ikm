@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"flag"
 	"log"
@@ -27,6 +28,26 @@ func injectVariablesToPrompt(prompt string, variables map[string]string) string 
 		prompt = regexp.MustCompile(`{{\s?`+key+`\s?}}`).ReplaceAllString(prompt, value)
 	}
 	return prompt
+}
+
+func readSystemPromptWithCustomInstructions(systemPromptTemplate string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("failed to get current working directory: %v", err)
+	}
+	customInstructions, err := os.ReadFile(".ikm/instructions.md")
+	if err != nil && !os.IsNotExist(err) {
+		log.Fatalf("failed to read instructions file at %s: %v", ".ikm/instructions.md", err)
+	}
+	customInstructionsContent := string(bytes.TrimSpace(customInstructions))
+	if customInstructionsContent == "" {
+		customInstructionsContent = "No custom instructions provided."
+	}
+	vars := map[string]string{
+		"cwd":          cwd,
+		"instructions": customInstructionsContent,
+	}
+	return injectVariablesToPrompt(systemPromptTemplate, vars)
 }
 
 type config struct {
@@ -110,14 +131,10 @@ func main() {
 	if cfg.mode != "agent" && cfg.mode != "dev" && cfg.mode != "raw" {
 		log.Fatalf("invalid mode: %s, must be one of: agent, dev, raw", cfg.mode)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("error getting current working directory: %v", err)
-	}
 	model := tui.Initial(debugLogger, cfg.anthropicKey, cfg.openRouterKey, runInBashDocker,
-		tui.WithStaticMode("agent", injectVariablesToPrompt(agentPrompt, map[string]string{"cwd": cwd})),
-		tui.WithStaticMode("dev", injectVariablesToPrompt(devPrompt, map[string]string{"cwd": cwd})),
-		tui.WithStaticMode("raw", injectVariablesToPrompt(rawPrompt, map[string]string{"cwd": cwd})),
+		tui.WithDynamicMode("agent", func() string { return readSystemPromptWithCustomInstructions(agentPrompt) }),
+		tui.WithDynamicMode("dev", func() string { return readSystemPromptWithCustomInstructions(devPrompt) }),
+		tui.WithDynamicMode("raw", func() string { return readSystemPromptWithCustomInstructions(rawPrompt) }),
 		tui.WithSetDefaultMode(cfg.mode),
 		tui.WithSetDefaultModel(cfg.model),
 		tui.WithDisabledTools(cfg.disabledTools),
