@@ -27,8 +27,15 @@ type OpenRouter struct {
 	token      string
 	model      string
 	tools      []Tool
+	cache      bool
 	provider   *openRouter_Request_Provider
 	transforms []openRouterRequestTransform
+}
+
+func WithOpenRouterCacheEnabled() OpenRouterOption {
+	return func(o *OpenRouter) {
+		o.cache = true
+	}
 }
 
 func WithOpenRouterOnlyProviders(only []string) OpenRouterOption {
@@ -341,6 +348,9 @@ func (o *OpenRouter) request(
 }
 
 func (o *OpenRouter) injectCacheControl(messages []openRouter_Message) {
+	if !o.cache {
+		return
+	}
 	lastSystemIdx := -1
 	lastUserIdx := -1
 	for i, msg := range messages {

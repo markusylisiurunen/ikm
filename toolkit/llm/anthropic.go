@@ -26,7 +26,14 @@ type Anthropic struct {
 	token  string
 	model  string
 	tools  []Tool
+	cache  bool
 	usage  *anthropic_Response_Usage
+}
+
+func WithAnthropicCacheEnabled() AnthropicOption {
+	return func(a *Anthropic) {
+		a.cache = true
+	}
 }
 
 func NewAnthropic(logger logger.Logger, token, model string, opts ...AnthropicOption) *Anthropic {
@@ -357,6 +364,9 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 }
 
 func (a *Anthropic) injectCacheControl(messages []anthropic_Message) {
+	if !a.cache {
+		return
+	}
 	// inject the cache control into the last available user message text part
 	userMessageCached := false
 	for i := len(messages) - 1; i >= 0; i-- {

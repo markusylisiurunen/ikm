@@ -200,7 +200,9 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 func (t *taskTool) runSingleAgent(ctx context.Context, modelName, agentID, prompt string) (string, error) {
 	t.logger.Debug("starting agent %q with model %q: %s", agentID, modelName, prompt)
 	// initialise the model with the tools
-	model := llm.NewOpenRouter(t.logger, t.openRouterToken, modelName)
+	model := llm.NewOpenRouter(t.logger, t.openRouterToken, modelName,
+		llm.WithOpenRouterCacheEnabled(),
+	)
 	model.Register(NewBash(t.exec).SetLogger(t.logger))
 	model.Register(NewFSList().SetLogger(t.logger))
 	model.Register(NewFSRead().SetLogger(t.logger))

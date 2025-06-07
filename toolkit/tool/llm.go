@@ -136,6 +136,12 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 	// process file paths
 	imagePaths := gjson.Get(args, "image_paths").Array()
 	pdfPaths := gjson.Get(args, "pdf_paths").Array()
+	// check if claude model is used with images or PDFs
+	isClaudeModel := strings.Contains(model, "claude")
+	if isClaudeModel && (len(imagePaths) > 0 || len(pdfPaths) > 0) {
+		t.logger.Error("claude models do not support images or PDFs")
+		return llmToolResult{Error: "claude models do not support images or PDFs"}.result()
+	}
 	// build content parts
 	t.logger.Debug("calling LLM with model %s, user prompt length %d, %d images and %d PDFs", model, len(userPrompt), len(imagePaths), len(pdfPaths))
 	contentParts := llm.ContentParts{llm.NewTextContentPart(userPrompt)}

@@ -14,6 +14,10 @@ Usage notes:
 - An optional system prompt can be provided to set context for the LLM.
 - Files are included after the user prompt in the conversation.
 
+Limitations:
+
+- Claude does not support images or PDFs, so it should only be used for text-based tasks.
+
 When to automatically use this tool (without explicit user request):
 
 - **ONLY** when you need to analyze or extract data from images or PDFs that cannot be processed directly.

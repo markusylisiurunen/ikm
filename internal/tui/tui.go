@@ -901,23 +901,31 @@ func (m *Model) handleModelSlashCommand(args []string) {
 
 func (m Model) createModelInstance(modelName string) llm.Model {
 	if modelName == "anthropic/claude-sonnet-4" {
-		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-sonnet-4-20250514")
+		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-sonnet-4-20250514",
+			llm.WithAnthropicCacheEnabled(),
+		)
 	}
 	if modelName == "anthropic/claude-opus-4" {
-		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-opus-4-20240620")
+		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-opus-4-20240620",
+			llm.WithAnthropicCacheEnabled(),
+		)
 	}
 	if modelName == "mistralai/devstral-small" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+			llm.WithOpenRouterCacheEnabled(),
 			llm.WithOpenRouterOrderProviders([]string{"Mistral"}, false),
 			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
 		)
 	}
 	if modelName == "qwen/qwen3-32b" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+			llm.WithOpenRouterCacheEnabled(),
 			llm.WithOpenRouterOrderProviders([]string{"Cerebras"}, false),
 		)
 	}
-	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+		llm.WithOpenRouterCacheEnabled(),
+	)
 }
 
 func (m Model) configureAgentModel(modelName string, model llm.Model) {
