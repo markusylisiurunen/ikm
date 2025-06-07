@@ -507,11 +507,15 @@ func (m *anthropic_Message) from(msg Message) error {
 	}
 	if len(msg.ToolCalls) > 0 {
 		for _, tc := range msg.ToolCalls {
+			input := "{}"
+			if tc.Function.Args != "" {
+				input = tc.Function.Args
+			}
 			m.Content = append(m.Content, anthropic_Message_ToolUse{
 				Type:  "tool_use",
 				ID:    tc.ID,
 				Name:  tc.Function.Name,
-				Input: json.RawMessage(tc.Function.Args),
+				Input: json.RawMessage(input),
 			})
 		}
 	}
