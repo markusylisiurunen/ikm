@@ -311,9 +311,13 @@ func (o *OpenRouter) request(
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "low"}
 		case 2:
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "medium"}
-		default:
+		case 3:
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "high"}
+		default:
+			o.logger.Error("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
 		}
+	} else if config.reasoningMaxTokens > 0 {
+		payload.Reasoning = &openRouter_Request_Reasoning{MaxTokens: config.reasoningMaxTokens}
 	}
 	if len(o.tools) > 0 {
 		payload.Tools = make([]openRouter_Request_Tool, len(o.tools))
@@ -378,13 +382,16 @@ func (o *OpenRouter) addCacheControlToMessage(msg *openRouter_Message) {
 
 func (o *OpenRouter) generationConfig(opts ...StreamOption) streamConfig {
 	c := streamConfig{
-		maxTokens:       8192,
-		maxTurns:        1,
-		reasoningEffort: 0,
-		temperature:     1.0,
+		maxTokens:          8192,
+		maxTurns:           1,
+		reasoningEffort:    0,
+		reasoningMaxTokens: 0,
+		temperature:        1.0,
 	}
 	for _, opt := range opts {
-		opt(&c)
+		if opt != nil {
+			opt(&c)
+		}
 	}
 	return c
 }
@@ -594,7 +601,8 @@ type openRouter_Request_Tool struct {
 }
 
 type openRouter_Request_Reasoning struct {
-	Effort string `json:"effort"`
+	Effort    string `json:"effort,omitzero"`
+	MaxTokens uint   `json:"max_tokens,omitzero"`
 }
 
 type openRouter_Request_Usage struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -63,12 +64,13 @@ type Model struct {
 	viewport  viewport.Model
 	textinput textinput.Model
 
-	mode          model_Mode
-	modes         []model_Mode
-	disabledTools []string
-	agent         *agent.Agent
-	subscription  <-chan agent.Event
-	unsubscribe   func()
+	mode            model_Mode
+	modes           []model_Mode
+	disabledTools   []string
+	reasoningEffort uint8
+	agent           *agent.Agent
+	subscription    <-chan agent.Event
+	unsubscribe     func()
 
 	cancelFunc context.CancelFunc
 	errorMsg   string
@@ -122,6 +124,12 @@ func WithDisabledTools(tools []string) modelOption {
 	}
 }
 
+func WithReasoningEffort(effort uint8) modelOption {
+	return func(m *Model) {
+		m.reasoningEffort = effort
+	}
+}
+
 func Initial(
 	logger logger.Logger,
 	anthropicKey string,
@@ -134,6 +142,7 @@ func Initial(
 		runInBashDocker: runInBashDocker,
 		anthropicKey:    anthropicKey,
 		openRouterKey:   openRouterKey,
+		reasoningEffort: 2, // default to medium effort
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -923,22 +932,65 @@ func (m Model) createModelInstance(modelName string) llm.Model {
 			llm.WithOpenRouterOrderProviders([]string{"Cerebras"}, false),
 		)
 	}
-	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
-		llm.WithOpenRouterCacheEnabled(),
-	)
+	if strings.HasPrefix(modelName, "anthropic/") || strings.HasPrefix(modelName, "google/") {
+		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+			llm.WithOpenRouterCacheEnabled(),
+		)
+	}
+	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 }
 
 func (m Model) configureAgentModel(modelName string, model llm.Model) {
+	if modelName == "google/gemini-2.5-pro-preview" {
+		m.agent.SetModel(model,
+			llm.WithMaxTokens(32_768),
+			m.getReasoningMaxTokens(32_768, 256),
+		)
+		return
+	}
 	if modelName == "qwen/qwen3-32b" {
 		// the context window is only 32,768 tokens, so the output tokens must be significantly lower
 		m.agent.SetModel(model,
 			llm.WithMaxTokens(8_192),
-			llm.WithReasoningEffortMedium(),
+			m.getReasoningEffort(),
 		)
 		return
 	}
 	m.agent.SetModel(model,
 		llm.WithMaxTokens(32_768),
-		llm.WithReasoningEffortMedium(),
+		m.getReasoningEffort(),
 	)
+}
+
+func (m Model) getReasoningEffort() llm.StreamOption {
+	switch m.reasoningEffort {
+	case 0:
+		return nil
+	case 1:
+		return llm.WithReasoningEffortLow()
+	case 2:
+		return llm.WithReasoningEffortMedium()
+	case 3:
+		return llm.WithReasoningEffortHigh()
+	default:
+		panic(fmt.Sprintf("invalid reasoning effort: %d", m.reasoningEffort))
+	}
+}
+
+func (m Model) getReasoningMaxTokens(maxTokens int, minReasoningTokens uint) llm.StreamOption {
+	switch m.reasoningEffort {
+	case 0:
+		if minReasoningTokens > 0 {
+			return llm.WithReasoningMaxTokens(minReasoningTokens)
+		}
+		return nil
+	case 1:
+		return llm.WithReasoningMaxTokens(min(2048, uint(math.Round(0.2*float64(maxTokens)))))
+	case 2:
+		return llm.WithReasoningMaxTokens(min(8192, uint(math.Round(0.5*float64(maxTokens)))))
+	case 3:
+		return llm.WithReasoningMaxTokens(min(16384, uint(math.Round(0.8*float64(maxTokens)))))
+	default:
+		panic(fmt.Sprintf("invalid reasoning effort: %d", m.reasoningEffort))
+	}
 }

@@ -223,18 +223,25 @@ func (a *Anthropic) request(ctx context.Context, messages []Message, config stre
 		case 1:
 			payload.Thinking = &anthropic_Request_Thinking{
 				Type:         "enabled",
-				BudgetTokens: int(math.Round(float64(config.maxTokens) * 0.2)),
+				BudgetTokens: int(math.Round(0.2 * float64(config.maxTokens))),
 			}
 		case 2:
 			payload.Thinking = &anthropic_Request_Thinking{
 				Type:         "enabled",
-				BudgetTokens: int(math.Round(float64(config.maxTokens) * 0.5)),
+				BudgetTokens: int(math.Round(0.5 * float64(config.maxTokens))),
 			}
-		default:
+		case 3:
 			payload.Thinking = &anthropic_Request_Thinking{
 				Type:         "enabled",
-				BudgetTokens: int(math.Round(float64(config.maxTokens) * 0.8)),
+				BudgetTokens: int(math.Round(0.8 * float64(config.maxTokens))),
 			}
+		default:
+			a.logger.Error("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
+		}
+	} else if config.reasoningMaxTokens > 0 {
+		payload.Thinking = &anthropic_Request_Thinking{
+			Type:         "enabled",
+			BudgetTokens: int(config.reasoningMaxTokens),
 		}
 	}
 	if len(a.tools) > 0 {
@@ -411,13 +418,16 @@ func (a *Anthropic) injectCacheControl(messages []anthropic_Message) {
 
 func (a *Anthropic) generationConfig(opts ...StreamOption) streamConfig {
 	c := streamConfig{
-		maxTokens:       8192,
-		maxTurns:        1,
-		reasoningEffort: 0,
-		temperature:     1.0,
+		maxTokens:          8192,
+		maxTurns:           1,
+		reasoningEffort:    0,
+		reasoningMaxTokens: 0,
+		temperature:        1.0,
 	}
 	for _, opt := range opts {
-		opt(&c)
+		if opt != nil {
+			opt(&c)
+		}
 	}
 	return c
 }

@@ -51,12 +51,13 @@ func readSystemPromptWithCustomInstructions(systemPromptTemplate string) string 
 }
 
 type config struct {
-	debug         bool
-	disabledTools []string
-	mode          string
-	model         string
-	anthropicKey  string
-	openRouterKey string
+	debug           bool
+	disabledTools   []string
+	reasoningEffort uint8
+	mode            string
+	model           string
+	anthropicKey    string
+	openRouterKey   string
 }
 
 func (c *config) read() {
@@ -64,6 +65,7 @@ func (c *config) read() {
 		debug       = flag.Bool("debug", false, "enable debug logging")
 		mode        = flag.String("mode", "raw", "mode to use (agent, dev, raw)")
 		model       = flag.String("model", "claude-sonnet-4", "model to use")
+		reasoning   = flag.String("reasoning", "2", "reasoning effort level (0, 1, 2, 3)")
 		noTools     = flag.Bool("no-tools", false, "disable all tools")
 		noToolBash  = flag.Bool("no-tool-bash", false, "disable the bash tool")
 		noToolFS    = flag.Bool("no-tool-fs", false, "disable the fs tool")
@@ -73,6 +75,18 @@ func (c *config) read() {
 		noToolTodo  = flag.Bool("no-tool-todo", false, "disable the todo tool")
 	)
 	flag.Parse()
+	switch *reasoning {
+	case "0":
+		c.reasoningEffort = 0
+	case "1":
+		c.reasoningEffort = 1
+	case "2":
+		c.reasoningEffort = 2
+	case "3":
+		c.reasoningEffort = 3
+	default:
+		log.Fatalf("invalid reasoning effort level: %s, must be one of: 0, 1, 2, 3", *reasoning)
+	}
 	if *noTools {
 		*noToolBash = true
 		*noToolFS = true
@@ -147,6 +161,7 @@ func main() {
 		tui.WithSetDefaultMode(cfg.mode),
 		tui.WithSetDefaultModel(cfg.model),
 		tui.WithDisabledTools(cfg.disabledTools),
+		tui.WithReasoningEffort(cfg.reasoningEffort),
 	)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {

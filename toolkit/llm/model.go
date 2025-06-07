@@ -159,11 +159,12 @@ type Usage struct {
 type StopCondition func(turn int, history []Message) bool
 
 type streamConfig struct {
-	maxTokens       int
-	maxTurns        int
-	reasoningEffort uint8
-	stopCondition   StopCondition
-	temperature     float64
+	maxTokens          int
+	maxTurns           int
+	reasoningEffort    uint8
+	reasoningMaxTokens uint
+	stopCondition      StopCondition
+	temperature        float64
 }
 
 type StreamOption func(*streamConfig)
@@ -174,14 +175,17 @@ func WithMaxTokens(maxTokens int) StreamOption {
 func WithMaxTurns(maxTurns int) StreamOption {
 	return func(c *streamConfig) { c.maxTurns = maxTurns }
 }
-func WithReasoningEffortHigh() StreamOption {
-	return func(c *streamConfig) { c.reasoningEffort = 3 }
+func WithReasoningEffortLow() StreamOption {
+	return func(c *streamConfig) { c.reasoningEffort = 1 }
 }
 func WithReasoningEffortMedium() StreamOption {
 	return func(c *streamConfig) { c.reasoningEffort = 2 }
 }
-func WithReasoningEffortLow() StreamOption {
-	return func(c *streamConfig) { c.reasoningEffort = 1 }
+func WithReasoningEffortHigh() StreamOption {
+	return func(c *streamConfig) { c.reasoningEffort = 3 }
+}
+func WithReasoningMaxTokens(maxTokens uint) StreamOption {
+	return func(c *streamConfig) { c.reasoningMaxTokens = maxTokens }
 }
 func WithTemperature(temperature float64) StreamOption {
 	return func(c *streamConfig) { c.temperature = temperature }
