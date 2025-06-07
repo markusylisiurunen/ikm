@@ -9,6 +9,11 @@ import (
 
 type Event any
 
+type ThinkingDeltaEvent struct {
+	Thinking  string
+	Signature string
+}
+
 type ContentDeltaEvent struct {
 	Content string
 }
@@ -66,6 +71,16 @@ func NewTextContentPart(text string) TextContentPart {
 	return TextContentPart{Type: "text", Text: text}
 }
 
+type ThinkingContentPart struct {
+	Type      string
+	Thinking  string
+	Signature string
+}
+
+func NewThinkingContentPart(thinking, signature string) ThinkingContentPart {
+	return ThinkingContentPart{Type: "thinking", Thinking: thinking, Signature: signature}
+}
+
 type ImageContentPart struct {
 	Type     string
 	ImageURL string
@@ -112,6 +127,8 @@ func (c ContentParts) Text() string {
 	var sb strings.Builder
 	for _, part := range c {
 		switch p := part.(type) {
+		case ThinkingContentPart:
+			continue
 		case TextContentPart:
 			sb.WriteString(p.Text)
 		case ImageContentPart:

@@ -18,6 +18,25 @@ func (b *messageBuilder) process(event Event) {
 		return
 	}
 	switch e := event.(type) {
+	case *ThinkingDeltaEvent:
+		if b.init {
+			b.init = false
+			b.msgs = append(b.msgs, Message{Role: RoleAssistant, Content: ContentParts{}})
+		}
+		if b.msgs[len(b.msgs)-1].Role != RoleAssistant {
+			return
+		}
+		if len(b.msgs[len(b.msgs)-1].Content) == 0 {
+			b.msgs[len(b.msgs)-1].Content = append(b.msgs[len(b.msgs)-1].Content, NewThinkingContentPart("", ""))
+		}
+		if p, ok := b.msgs[len(b.msgs)-1].Content[0].(ThinkingContentPart); ok {
+			// append to the last thinking content part
+			p.Thinking += e.Thinking
+			if e.Signature != "" {
+				p.Signature = e.Signature
+			}
+			b.msgs[len(b.msgs)-1].Content[0] = p
+		}
 	case *ContentDeltaEvent:
 		if b.init {
 			b.init = false

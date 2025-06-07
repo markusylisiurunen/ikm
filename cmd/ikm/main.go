@@ -29,26 +29,12 @@ func injectVariablesToPrompt(prompt string, variables map[string]string) string 
 	return prompt
 }
 
-func filterPromptForDisabledTools(prompt string, disabledTools []string) string {
-	toolToHelpTag := map[string]string{
-		"llm":  "llm_tool_help",
-		"task": "task_tool_help",
-	}
-	for _, tool := range disabledTools {
-		if helpTag, exists := toolToHelpTag[tool]; exists {
-			pattern := `<` + helpTag + `[^>]*>.*?</` + helpTag + `>`
-			re := regexp.MustCompile(`(?s)` + pattern)
-			prompt = re.ReplaceAllString(prompt, "")
-		}
-	}
-	return prompt
-}
-
 type config struct {
 	debug         bool
 	disabledTools []string
 	mode          string
 	model         string
+	anthropicKey  string
 	openRouterKey string
 }
 
@@ -86,13 +72,17 @@ func (c *config) read() {
 	c.debug = *debug
 	c.mode = *mode
 	c.model = *model
+	c.anthropicKey = os.Getenv("ANTHROPIC_KEY")
 	c.openRouterKey = os.Getenv("OPENROUTER_KEY")
 }
 
 func main() {
 	var cfg config
 	cfg.read()
-	// validate OpenRouter key
+	// validate API keys
+	if cfg.anthropicKey == "" {
+		log.Fatal("ANTHROPIC_KEY environment variable is not set")
+	}
 	if cfg.openRouterKey == "" {
 		log.Fatal("OPENROUTER_KEY environment variable is not set")
 	}
@@ -124,10 +114,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("error getting current working directory: %v", err)
 	}
-	model := tui.Initial(debugLogger, cfg.openRouterKey, runInBashDocker,
-		tui.WithStaticMode("agent", injectVariablesToPrompt(filterPromptForDisabledTools(agentPrompt, cfg.disabledTools), map[string]string{"cwd": cwd})),
-		tui.WithStaticMode("dev", injectVariablesToPrompt(filterPromptForDisabledTools(devPrompt, cfg.disabledTools), map[string]string{"cwd": cwd})),
-		tui.WithStaticMode("raw", injectVariablesToPrompt(filterPromptForDisabledTools(rawPrompt, cfg.disabledTools), map[string]string{"cwd": cwd})),
+	model := tui.Initial(debugLogger, cfg.anthropicKey, cfg.openRouterKey, runInBashDocker,
+		tui.WithStaticMode("agent", injectVariablesToPrompt(agentPrompt, map[string]string{"cwd": cwd})),
+		tui.WithStaticMode("dev", injectVariablesToPrompt(devPrompt, map[string]string{"cwd": cwd})),
+		tui.WithStaticMode("raw", injectVariablesToPrompt(rawPrompt, map[string]string{"cwd": cwd})),
 		tui.WithSetDefaultMode(cfg.mode),
 		tui.WithSetDefaultModel(cfg.model),
 		tui.WithDisabledTools(cfg.disabledTools),

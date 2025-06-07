@@ -112,7 +112,8 @@ func (t *todoWriteTool) Spec() (string, string, json.RawMessage) {
 					"type": "object",
 					"properties": {
 						"id": {
-							"type": "string"
+							"type": "string",
+							"description": "A unique ID. Incrementing numbers ('1', '2', ...) are preferred."
 						},
 						"content": {
 							"type": "string",

@@ -53,6 +53,7 @@ type Model struct {
 	logger          logger.Logger
 	runInBashDocker func(context.Context, string) (int, string, string, error)
 
+	anthropicKey    string
 	openRouterKey   string
 	openRouterModel string
 
@@ -123,6 +124,7 @@ func WithDisabledTools(tools []string) modelOption {
 
 func Initial(
 	logger logger.Logger,
+	anthropicKey string,
 	openRouterKey string,
 	runInBashDocker func(context.Context, string) (int, string, string, error),
 	opts ...modelOption,
@@ -130,6 +132,7 @@ func Initial(
 	m := Model{
 		logger:          logger,
 		runInBashDocker: runInBashDocker,
+		anthropicKey:    anthropicKey,
 		openRouterKey:   openRouterKey,
 	}
 	for _, opt := range opts {
@@ -897,6 +900,12 @@ func (m *Model) handleModelSlashCommand(args []string) {
 }
 
 func (m Model) createModelInstance(modelName string) llm.Model {
+	if modelName == "anthropic/claude-sonnet-4" {
+		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-sonnet-4-20250514")
+	}
+	if modelName == "anthropic/claude-opus-4" {
+		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-opus-4-20240620")
+	}
 	if modelName == "mistralai/devstral-small" {
 		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
 			llm.WithOpenRouterOrderProviders([]string{"Mistral"}, false),
@@ -916,12 +925,12 @@ func (m Model) configureAgentModel(modelName string, model llm.Model) {
 		// the context window is only 32,768 tokens, so the output tokens must be significantly lower
 		m.agent.SetModel(model,
 			llm.WithMaxTokens(8_192),
-			llm.WithReasoningEffortHigh(),
+			llm.WithReasoningEffortMedium(),
 		)
 		return
 	}
 	m.agent.SetModel(model,
 		llm.WithMaxTokens(32_768),
-		llm.WithReasoningEffortHigh(),
+		llm.WithReasoningEffortMedium(),
 	)
 }

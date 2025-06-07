@@ -120,6 +120,8 @@ func (a *Agent) send(ctx context.Context, message string) {
 	a.notify(&ChangeEvent{})
 	for event := range a.model.Stream(ctx, a.getMessageHistory(), a.streamOptions...) {
 		switch e := event.(type) {
+		case *llm.ThinkingDeltaEvent:
+			continue
 		case *llm.ContentDeltaEvent:
 			a.mux.Lock()
 			if msg := a.messages[len(a.messages)-1]; msg.Role != llm.RoleAssistant {

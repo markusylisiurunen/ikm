@@ -195,8 +195,8 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 				continue
 			}
 			var raw string
-			if strings.HasPrefix(line, "data: ") {
-				raw = strings.TrimPrefix(line, "data: ")
+			if after, ok := strings.CutPrefix(line, "data: "); ok {
+				raw = after
 			} else if strings.HasPrefix(line, "{") {
 				raw = line
 			}
