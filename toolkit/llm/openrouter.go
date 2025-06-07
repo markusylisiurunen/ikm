@@ -219,21 +219,13 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 				return
 			}
 			if chunk.Usage != nil {
-				if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
-					o.logger.Debug("OpenRouter usage: %d prompt tokens (cached: %d or %.2f), %d completion tokens, total cost: $%.6f",
-						chunk.Usage.PromptTokens,
-						chunk.Usage.PromptTokensDetails.CachedTokens,
-						float64(chunk.Usage.PromptTokensDetails.CachedTokens)/float64(chunk.Usage.PromptTokens),
-						chunk.Usage.CompletionTokens,
-						chunk.Usage.Cost,
-					)
-				} else {
-					o.logger.Debug("OpenRouter usage: %d prompt tokens, %d completion tokens, total cost: $%.6f",
-						chunk.Usage.PromptTokens,
-						chunk.Usage.CompletionTokens,
-						chunk.Usage.Cost,
-					)
-				}
+				o.logger.Debug("OpenRouter usage: %d prompt tokens (cached %d or %.2f%%), %d completion tokens, total cost $%.6f",
+					chunk.Usage.PromptTokens,
+					chunk.Usage.PromptTokensDetails.CachedTokens,
+					float64(chunk.Usage.PromptTokensDetails.CachedTokens)/float64(chunk.Usage.PromptTokens)*100,
+					chunk.Usage.CompletionTokens,
+					chunk.Usage.Cost,
+				)
 				ch <- &UsageEvent{Usage: Usage{
 					PromptTokens:     chunk.Usage.PromptTokens,
 					CompletionTokens: chunk.Usage.CompletionTokens,

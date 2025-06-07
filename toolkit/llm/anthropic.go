@@ -456,7 +456,7 @@ func (a *Anthropic) estimateCost(usage anthropic_Response_Usage) float64 {
 		millionOutputTokens*cost.outputTokens
 	costWithoutCache := (millionInputTokens+millionCacheCreationInputTokens+millionCacheReadInputTokens)*cost.inputTokens +
 		millionOutputTokens*cost.outputTokens
-	a.logger.Debug("Anthropic cost estimate: $%.3f (without cache), $%.3f (with cache), saved $%.3f or %.2f%%",
+	a.logger.Debug("Anthropic cost estimate: $%.6f (without cache), $%.6f (with cache), saved $%.6f or %.2f%%",
 		costWithoutCache, costWithCache, costWithoutCache-costWithCache, (costWithoutCache-costWithCache)/costWithoutCache*100)
 	return costWithCache
 }
