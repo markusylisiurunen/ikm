@@ -64,6 +64,7 @@ func (c *config) read() {
 		debug       = flag.Bool("debug", false, "enable debug logging")
 		mode        = flag.String("mode", "raw", "mode to use (agent, dev, raw)")
 		model       = flag.String("model", "claude-sonnet-4", "model to use")
+		noTools     = flag.Bool("no-tools", false, "disable all tools")
 		noToolBash  = flag.Bool("no-tool-bash", false, "disable the bash tool")
 		noToolFS    = flag.Bool("no-tool-fs", false, "disable the fs tool")
 		noToolLLM   = flag.Bool("no-tool-llm", false, "disable the llm tool")
@@ -72,6 +73,14 @@ func (c *config) read() {
 		noToolTodo  = flag.Bool("no-tool-todo", false, "disable the todo tool")
 	)
 	flag.Parse()
+	if *noTools {
+		*noToolBash = true
+		*noToolFS = true
+		*noToolLLM = true
+		*noToolTask = true
+		*noToolThink = true
+		*noToolTodo = true
+	}
 	if *noToolBash {
 		c.disabledTools = append(c.disabledTools, "bash")
 	}

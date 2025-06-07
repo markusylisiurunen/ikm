@@ -5,8 +5,8 @@ go 1.24.4
 require (
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.5
-	github.com/charmbracelet/glamour v0.10.0
 	github.com/fatih/color v1.18.0
+	github.com/markusylisiurunen/glamour v0.0.0-20250607173023-7f63b8e02010
 	github.com/tidwall/gjson v1.18.0
 	golang.org/x/sync v0.15.0
 )
