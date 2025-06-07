@@ -357,16 +357,44 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 }
 
 func (a *Anthropic) injectCacheControl(messages []anthropic_Message) {
+	// inject the cache control into the last available user message text part
+	userMessageCached := false
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" && len(messages[i].Content) > 0 {
-			idx := len(messages[i].Content) - 1
-			part, ok := messages[i].Content[idx].(anthropic_Message_Text)
+		if userMessageCached {
+			break
+		}
+		if messages[i].Role != "user" || len(messages[i].Content) == 0 {
+			continue
+		}
+		for j := len(messages[i].Content) - 1; j >= 0; j-- {
+			part, ok := messages[i].Content[j].(anthropic_Message_Text)
 			if !ok {
 				continue
 			}
 			part.CacheControl = &anthropic_Message_CacheControl{Type: "ephemeral"}
-			messages[i].Content[idx] = part
-			return
+			messages[i].Content[j] = part
+			userMessageCached = true
+			break
+		}
+	}
+	// inject the cache control into the last available user message tool result part
+	toolResultCached := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		if toolResultCached {
+			break
+		}
+		if messages[i].Role != "user" || len(messages[i].Content) == 0 {
+			continue
+		}
+		for j := len(messages[i].Content) - 1; j >= 0; j-- {
+			part, ok := messages[i].Content[j].(anthropic_Message_ToolResult)
+			if !ok {
+				continue
+			}
+			part.CacheControl = &anthropic_Message_CacheControl{Type: "ephemeral"}
+			messages[i].Content[j] = part
+			toolResultCached = true
+			break
 		}
 	}
 }
@@ -456,9 +484,10 @@ type anthropic_Message_ToolUse struct {
 	Input json.RawMessage `json:"input"`
 }
 type anthropic_Message_ToolResult struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
+	Type         string                          `json:"type"`
+	ToolUseID    string                          `json:"tool_use_id"`
+	Content      string                          `json:"content"`
+	CacheControl *anthropic_Message_CacheControl `json:"cache_control,omitzero"`
 }
 type anthropic_Message struct {
 	Role    string `json:"role"`
