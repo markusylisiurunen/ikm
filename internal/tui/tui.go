@@ -158,9 +158,10 @@ func Initial(
 	m.thoroughButCostlyModel = "anthropic/claude-sonnet-4"
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
-	model := m.createModelInstance(m.openRouterModel)
-	m.registerTools(model)
-	m.configureAgentModel(m.openRouterModel, model)
+	if err := m.configureModel(m.openRouterModel); err != nil {
+		m.logger.Error("failed to configure model %s: %v", m.openRouterModel, err)
+		m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", m.openRouterModel, err)
+	}
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
 	// init the viewport
@@ -180,47 +181,6 @@ func Initial(
 	ti.CharLimit = 4096
 	m.textinput = ti
 	return m
-}
-
-func (m Model) registerTools(model llm.Model) {
-	if !m.isToolDisabled("bash") {
-		model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
-	} else {
-		m.logger.Debug("skipped disabled tool: bash")
-	}
-	if !m.isToolDisabled("fs") {
-		model.Register(tool.NewFSList().SetLogger(m.logger))
-		model.Register(tool.NewFSRead().SetLogger(m.logger))
-		model.Register(tool.NewFSReplace().SetLogger(m.logger))
-		model.Register(tool.NewFSWrite().SetLogger(m.logger))
-	} else {
-		m.logger.Debug("skipped disabled tool: fs")
-	}
-	if !m.isToolDisabled("llm") {
-		model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
-	} else {
-		m.logger.Debug("skipped disabled tool: llm")
-	}
-	if !m.isToolDisabled("task") {
-		model.Register(tool.NewTask(
-			m.runInBashDocker,
-			m.openRouterKey,
-			m.fastButCapableModel, m.thoroughButCostlyModel,
-		).SetLogger(m.logger))
-	} else {
-		m.logger.Debug("skipped disabled tool: task")
-	}
-	if !m.isToolDisabled("think") {
-		model.Register(tool.NewThink().SetLogger(m.logger))
-	} else {
-		m.logger.Debug("skipped disabled tool: think")
-	}
-	if !m.isToolDisabled("todo") {
-		model.Register(tool.NewTodoRead().SetLogger(m.logger))
-		model.Register(tool.NewTodoWrite().SetLogger(m.logger))
-	} else {
-		m.logger.Debug("skipped disabled tool: todo")
-	}
 }
 
 func (m Model) isToolDisabled(toolName string) bool {
@@ -676,14 +636,13 @@ func (m Model) listModels() []string {
 		"anthropic/claude-opus-4",
 		"anthropic/claude-sonnet-4",
 		"google/gemini-2.5-flash-preview-05-20",
-		"google/gemini-2.5-flash-preview-05-20:thinking",
 		"google/gemini-2.5-pro-preview",
 		"mistralai/devstral-small",
 		"openai/codex-mini",
 		"openai/gpt-4.1",
 		"openai/gpt-4.1-mini",
 		"openai/o3",
-		"openai/o4-mini-high",
+		"openai/o4-mini",
 		"qwen/qwen3-32b",
 	}
 }
@@ -696,8 +655,6 @@ func (m Model) getModelSlug(model string) string {
 		return "claude-sonnet-4"
 	case "google/gemini-2.5-flash-preview-05-20":
 		return "gemini-2.5-flash"
-	case "google/gemini-2.5-flash-preview-05-20:thinking":
-		return "gemini-2.5-flash-thinking"
 	case "google/gemini-2.5-pro-preview":
 		return "gemini-2.5-pro"
 	case "mistralai/devstral-small":
@@ -710,8 +667,8 @@ func (m Model) getModelSlug(model string) string {
 		return "gpt-4.1-mini"
 	case "openai/o3":
 		return "o3"
-	case "openai/o4-mini-high":
-		return "o4-mini-high"
+	case "openai/o4-mini":
+		return "o4-mini"
 	case "qwen/qwen3-32b":
 		return "qwen3-32b"
 	default:
@@ -900,69 +857,147 @@ func (m *Model) handleModelSlashCommand(args []string) {
 	for _, id := range m.listModels() {
 		if m.getModelSlug(id) == args[0] {
 			m.openRouterModel = id
-			model := m.createModelInstance(m.openRouterModel)
-			m.registerTools(model)
-			m.configureAgentModel(m.openRouterModel, model)
+			if err := m.configureModel(id); err != nil {
+				m.logger.Error("failed to configure model %s: %v", id, err)
+				m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", id, err)
+				m.viewport.SetContent(m.renderContent())
+				m.viewport.GotoBottom()
+			}
 			return
 		}
 	}
 }
 
-func (m Model) createModelInstance(modelName string) llm.Model {
-	if modelName == "anthropic/claude-sonnet-4" {
-		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-sonnet-4-20250514",
+func (m Model) configureModel(modelName string) error {
+	var (
+		model         llm.Model
+		streamOptions []llm.StreamOption
+	)
+	switch modelName {
+	case "anthropic/claude-opus-4":
+		model = llm.NewAnthropic(m.logger, m.anthropicKey, "claude-opus-4-20240620",
 			llm.WithAnthropicCacheEnabled(),
 		)
-	}
-	if modelName == "anthropic/claude-opus-4" {
-		return llm.NewAnthropic(m.logger, m.anthropicKey, "claude-opus-4-20240620",
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "anthropic/claude-sonnet-4":
+		model = llm.NewAnthropic(m.logger, m.anthropicKey, "claude-sonnet-4-20250514",
 			llm.WithAnthropicCacheEnabled(),
 		)
-	}
-	if modelName == "mistralai/devstral-small" {
-		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "google/gemini-2.5-flash-preview-05-20":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "google/gemini-2.5-pro-preview":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningMaxTokensOption(32_768, 256),
+		}
+	case "mistralai/devstral-small":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
 			llm.WithOpenRouterCacheEnabled(),
 			llm.WithOpenRouterOrderProviders([]string{"Mistral"}, false),
 			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
 		)
-	}
-	if modelName == "qwen/qwen3-32b" {
-		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+		}
+	case "openai/codex-mini":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "openai/gpt-4.1":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+		}
+	case "openai/gpt-4.1-mini":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+		}
+	case "openai/o3":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "openai/o4-mini":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "qwen/qwen3-32b":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
 			llm.WithOpenRouterCacheEnabled(),
 			llm.WithOpenRouterOrderProviders([]string{"Cerebras"}, false),
 		)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(8_192), // NOTE: the context window is only 32,768 tokens, so the output tokens must be significantly lower
+			m.getReasoningEffortOption(),
+		}
+	default:
+		return fmt.Errorf("unknown model: %s", modelName)
 	}
-	if strings.HasPrefix(modelName, "anthropic/") || strings.HasPrefix(modelName, "google/") {
-		return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
-			llm.WithOpenRouterCacheEnabled(),
-		)
-	}
-	return llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+	m.registerTools(model)
+	m.agent.SetModel(model, streamOptions...)
+	return nil
 }
 
-func (m Model) configureAgentModel(modelName string, model llm.Model) {
-	if modelName == "google/gemini-2.5-pro-preview" {
-		m.agent.SetModel(model,
-			llm.WithMaxTokens(32_768),
-			m.getReasoningMaxTokens(32_768, 256),
-		)
-		return
+func (m Model) registerTools(model llm.Model) {
+	if !m.isToolDisabled("bash") {
+		model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: bash")
 	}
-	if modelName == "qwen/qwen3-32b" {
-		// the context window is only 32,768 tokens, so the output tokens must be significantly lower
-		m.agent.SetModel(model,
-			llm.WithMaxTokens(8_192),
-			m.getReasoningEffort(),
-		)
-		return
+	if !m.isToolDisabled("fs") {
+		model.Register(tool.NewFSList().SetLogger(m.logger))
+		model.Register(tool.NewFSRead().SetLogger(m.logger))
+		model.Register(tool.NewFSReplace().SetLogger(m.logger))
+		model.Register(tool.NewFSWrite().SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: fs")
 	}
-	m.agent.SetModel(model,
-		llm.WithMaxTokens(32_768),
-		m.getReasoningEffort(),
-	)
+	if !m.isToolDisabled("llm") {
+		model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: llm")
+	}
+	if !m.isToolDisabled("task") {
+		model.Register(tool.NewTask(
+			m.runInBashDocker,
+			m.openRouterKey,
+			m.fastButCapableModel, m.thoroughButCostlyModel,
+		).SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: task")
+	}
+	if !m.isToolDisabled("think") {
+		model.Register(tool.NewThink().SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: think")
+	}
+	if !m.isToolDisabled("todo") {
+		model.Register(tool.NewTodoRead().SetLogger(m.logger))
+		model.Register(tool.NewTodoWrite().SetLogger(m.logger))
+	} else {
+		m.logger.Debug("skipped disabled tool: todo")
+	}
 }
 
-func (m Model) getReasoningEffort() llm.StreamOption {
+func (m Model) getReasoningEffortOption() llm.StreamOption {
 	switch m.reasoningEffort {
 	case 0:
 		return nil
@@ -977,7 +1012,7 @@ func (m Model) getReasoningEffort() llm.StreamOption {
 	}
 }
 
-func (m Model) getReasoningMaxTokens(maxTokens int, minReasoningTokens uint) llm.StreamOption {
+func (m Model) getReasoningMaxTokensOption(maxTokens int, minReasoningTokens uint) llm.StreamOption {
 	switch m.reasoningEffort {
 	case 0:
 		if minReasoningTokens > 0 {
