@@ -880,6 +880,7 @@ func (m Model) configureModel(modelName string) error {
 		)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "anthropic/claude-sonnet-4":
@@ -888,18 +889,21 @@ func (m Model) configureModel(modelName string) error {
 		)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "google/gemini-2.5-flash-preview-05-20":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "google/gemini-2.5-pro-preview":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningMaxTokensOption(32_768, 256),
 		}
 	case "mistralai/devstral-small":
@@ -921,22 +925,26 @@ func (m Model) configureModel(modelName string) error {
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 		}
 	case "openai/gpt-4.1-mini":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 		}
 	case "openai/o3":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "openai/o4-mini":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "qwen/qwen3-32b":
