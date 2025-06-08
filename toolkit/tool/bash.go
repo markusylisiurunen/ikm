@@ -65,24 +65,24 @@ func (t *bashTool) Spec() (string, string, json.RawMessage) {
 
 func (t *bashTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("bash tool called with invalid JSON arguments")
+		t.logger.Errorf("bash tool called with invalid JSON arguments")
 		return bashToolResult{Ok: false, Error: "invalid JSON arguments"}.result()
 	}
 	cmd := gjson.Get(args, "command").String()
 	if cmd == "" {
-		t.logger.Error("bash tool called without command")
+		t.logger.Errorf("bash tool called without command")
 		return bashToolResult{Ok: false, Error: "command is required"}.result()
 	}
 	if len(cmd) > bashToolMaxCmdLength {
-		t.logger.Error("bash tool called with command exceeding max length: %d", len(cmd))
+		t.logger.Errorf("bash tool called with command exceeding max length: %d", len(cmd))
 		return bashToolResult{Ok: false, Error: fmt.Sprintf("command exceeds maximum length of %d characters", bashToolMaxCmdLength)}.result()
 	}
 	_, stdout, stderr, err := t.exec(ctx, cmd)
 	if err != nil {
-		t.logger.Error("bash tool execution of %q failed: %s", cmd, err.Error())
+		t.logger.Errorf("bash tool execution of %q failed: %s", cmd, err.Error())
 		return bashToolResult{Ok: false, Error: err.Error()}.result()
 	}
-	t.logger.Debug("bash tool executed %q successfully", cmd)
+	t.logger.Debugf("bash tool executed %q successfully", cmd)
 	return bashToolResult{
 		Ok:     true,
 		Stdout: stdout,

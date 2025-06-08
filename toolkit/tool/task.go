@@ -108,7 +108,7 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, taskToolExecTimeout)
 	defer cancel()
 	if !gjson.Valid(args) {
-		t.logger.Error("task tool called with invalid JSON arguments")
+		t.logger.Errorf("task tool called with invalid JSON arguments")
 		return taskToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	// parse and validate the arguments
@@ -144,7 +144,7 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 	if modelName == "" {
 		return taskToolResult{Error: fmt.Sprintf("no model configured for effort level '%s'", effort)}.result()
 	}
-	t.logger.Debug("executing task with effort %q and model %q for %d agents: %s", effort, modelName, len(agents), prompt)
+	t.logger.Debugf("executing task with effort %q and model %q for %d agents: %s", effort, modelName, len(agents), prompt)
 	// run agents in parallel using errgroup
 	g, gctx := errgroup.WithContext(ctx)
 	results := make([]string, len(agents))
@@ -177,7 +177,7 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 		})
 	}
 	if err := g.Wait(); err != nil {
-		t.logger.Error("task execution failed: %s", err.Error())
+		t.logger.Errorf("task execution failed: %s", err.Error())
 		return taskToolResult{Error: fmt.Sprintf("task execution failed: %s", err.Error())}.result()
 	}
 	// combine results from all agents
@@ -193,12 +193,12 @@ func (t *taskTool) Call(ctx context.Context, args string) (string, error) {
 	if len(report) > taskToolMaxReportLength {
 		report = report[:taskToolMaxReportLength] + "... (truncated)"
 	}
-	t.logger.Debug("task completed successfully with %d agent results", len(results))
+	t.logger.Debugf("task completed successfully with %d agent results", len(results))
 	return taskToolResult{Report: report}.result()
 }
 
 func (t *taskTool) runSingleAgent(ctx context.Context, modelName, agentID, prompt string) (string, error) {
-	t.logger.Debug("starting agent %q with model %q: %s", agentID, modelName, prompt)
+	t.logger.Debugf("starting agent %q with model %q: %s", agentID, modelName, prompt)
 	// initialise the model with the tools
 	model := llm.NewOpenRouter(t.logger, t.openRouterToken, modelName)
 	model.Register(NewBash(t.exec).SetLogger(t.logger))
@@ -243,7 +243,7 @@ func (t *taskTool) runSingleAgent(ctx context.Context, modelName, agentID, promp
 		}
 		// if we got an assistant message, use it as the result
 		if lastAssistantMessage != "" {
-			t.logger.Debug("agent %q completed with result: %s", agentID, lastAssistantMessage)
+			t.logger.Debugf("agent %q completed with result: %s", agentID, lastAssistantMessage)
 			return lastAssistantMessage, nil
 		}
 		if userPromptCount >= taskToolMaxUserPrompts {
@@ -251,7 +251,7 @@ func (t *taskTool) runSingleAgent(ctx context.Context, modelName, agentID, promp
 		}
 		userPromptCount++
 		history = append(history, t.completeUserMessage())
-		t.logger.Debug("agent %q injecting completion prompt (attempt %d/%d)", agentID, userPromptCount, taskToolMaxUserPrompts)
+		t.logger.Debugf("agent %q injecting completion prompt (attempt %d/%d)", agentID, userPromptCount, taskToolMaxUserPrompts)
 	}
 	return "", fmt.Errorf("agent %q did not complete after %d turns with model %q", agentID, taskToolMaxUserPrompts, modelName)
 }

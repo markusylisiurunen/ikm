@@ -107,28 +107,28 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, llmToolTimeout)
 	defer cancel()
 	if !gjson.Valid(args) {
-		t.logger.Error("llm tool called with invalid JSON arguments")
+		t.logger.Errorf("llm tool called with invalid JSON arguments")
 		return llmToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	// validate model
 	model := gjson.Get(args, "model").String()
 	if model == "" {
-		t.logger.Error("llm tool called without model")
+		t.logger.Errorf("llm tool called without model")
 		return llmToolResult{Error: "model is required"}.result()
 	}
 	modelName := t.availableModels[model]
 	if modelName == "" {
-		t.logger.Error("llm tool called with invalid model: %s", model)
+		t.logger.Errorf("llm tool called with invalid model: %s", model)
 		return llmToolResult{Error: fmt.Sprintf("model %q is not available", model)}.result()
 	}
 	// validate user prompt
 	userPrompt := gjson.Get(args, "user_prompt").String()
 	if userPrompt == "" {
-		t.logger.Error("llm tool called without user_prompt")
+		t.logger.Errorf("llm tool called without user_prompt")
 		return llmToolResult{Error: "user_prompt is required"}.result()
 	}
 	if len(userPrompt) > llmToolMaxPromptLength {
-		t.logger.Error("llm tool called with user_prompt exceeding max length: %d", len(userPrompt))
+		t.logger.Errorf("llm tool called with user_prompt exceeding max length: %d", len(userPrompt))
 		return llmToolResult{Error: fmt.Sprintf("user_prompt exceeds maximum length of %d characters", llmToolMaxPromptLength)}.result()
 	}
 	// optional system prompt
@@ -139,11 +139,11 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 	// check if claude model is used with images or PDFs
 	isClaudeModel := strings.Contains(model, "claude")
 	if isClaudeModel && (len(imagePaths) > 0 || len(pdfPaths) > 0) {
-		t.logger.Error("claude models do not support images or PDFs")
+		t.logger.Errorf("claude models do not support images or PDFs")
 		return llmToolResult{Error: "claude models do not support images or PDFs"}.result()
 	}
 	// build content parts
-	t.logger.Debug("calling LLM with model %s, user prompt length %d, %d images and %d PDFs", model, len(userPrompt), len(imagePaths), len(pdfPaths))
+	t.logger.Debugf("calling LLM with model %s, user prompt length %d, %d images and %d PDFs", model, len(userPrompt), len(imagePaths), len(pdfPaths))
 	contentParts := llm.ContentParts{llm.NewTextContentPart(userPrompt)}
 	// add images
 	for _, imagePathValue := range imagePaths {
@@ -153,7 +153,7 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 		}
 		imageContentPart, err := t.loadImageFile(imagePath)
 		if err != nil {
-			t.logger.Error("failed to load image %s: %s", imagePath, err.Error())
+			t.logger.Errorf("failed to load image %s: %s", imagePath, err.Error())
 			return llmToolResult{Error: fmt.Sprintf("failed to load image %s: %s", imagePath, err.Error())}.result()
 		}
 		contentParts = append(contentParts, imageContentPart)
@@ -166,7 +166,7 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 		}
 		pdfContentPart, err := t.loadPDFFile(pdfPath)
 		if err != nil {
-			t.logger.Error("failed to load PDF %s: %s", pdfPath, err.Error())
+			t.logger.Errorf("failed to load PDF %s: %s", pdfPath, err.Error())
 			return llmToolResult{Error: fmt.Sprintf("failed to load PDF %s: %s", pdfPath, err.Error())}.result()
 		}
 		contentParts = append(contentParts, pdfContentPart)
@@ -192,19 +192,19 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 	)
 	responseMessages, _, err := llm.Rollup(events)
 	if err != nil {
-		t.logger.Error("LLM call failed: %s", err.Error())
+		t.logger.Errorf("LLM call failed: %s", err.Error())
 		return llmToolResult{Error: fmt.Sprintf("LLM call failed: %s", err.Error())}.result()
 	}
 	if len(responseMessages) == 0 {
-		t.logger.Error("no response received from LLM")
+		t.logger.Errorf("no response received from LLM")
 		return llmToolResult{Error: "no response received from LLM"}.result()
 	}
 	if responseMessages[0].Role != llm.RoleAssistant {
-		t.logger.Error("unexpected response role: %s, expected %s", responseMessages[0].Role, llm.RoleAssistant)
+		t.logger.Errorf("unexpected response role: %s, expected %s", responseMessages[0].Role, llm.RoleAssistant)
 		return llmToolResult{Error: fmt.Sprintf("unexpected response role: %s, expected %s", responseMessages[0].Role, llm.RoleAssistant)}.result()
 	}
 	answer := responseMessages[0].Content.Text()
-	t.logger.Debug("LLM call completed successfully, response length: %d", len(answer))
+	t.logger.Debugf("LLM call completed successfully, response length: %d", len(answer))
 	return llmToolResult{Answer: answer}.result()
 }
 

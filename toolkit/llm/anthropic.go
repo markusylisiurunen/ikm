@@ -236,7 +236,7 @@ func (a *Anthropic) request(ctx context.Context, messages []Message, config stre
 				BudgetTokens: int(math.Round(0.8 * float64(config.maxTokens))),
 			}
 		default:
-			a.logger.Error("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
+			a.logger.Errorf("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
 		}
 	} else if config.reasoningMaxTokens > 0 {
 		payload.Thinking = &anthropic_Request_Thinking{
@@ -261,7 +261,7 @@ func (a *Anthropic) request(ctx context.Context, messages []Message, config stre
 	if err := encoder.Encode(payload); err != nil {
 		return nil, fmt.Errorf("error marshalling request: %w", err)
 	}
-	a.logger.Debug("Anthropic request payload: %s", data.String())
+	a.logger.Debugj("Anthropic request payload", data.Bytes())
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodPost, "https://api.anthropic.com/v1/messages", &data)
 	if err != nil {
@@ -280,11 +280,11 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 	case "message_start":
 		var msgStart anthropic_Response_MessageStart
 		if err := json.Unmarshal([]byte(data), &msgStart); err != nil {
-			a.logger.Error("failed to parse message_start: %v", err)
+			a.logger.Errorf("failed to parse message_start: %v", err)
 			return
 		}
 		if usage := msgStart.Message.Usage; usage != nil {
-			a.logger.Debug("Anthropic usage: %d prompt tokens (cached %d or %.2f%%)",
+			a.logger.Debugf("Anthropic usage: %d prompt tokens (cached %d or %.2f%%)",
 				usage.InputTokens+usage.CacheCreationInputTokens+usage.CacheReadInputTokens,
 				usage.CacheReadInputTokens,
 				float64(usage.CacheReadInputTokens)/float64(usage.InputTokens+usage.CacheCreationInputTokens+usage.CacheReadInputTokens)*100.0,
@@ -294,7 +294,7 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 	case "content_block_start":
 		var blockStart anthropic_Response_ContentBlockStart
 		if err := json.Unmarshal([]byte(data), &blockStart); err != nil {
-			a.logger.Error("failed to parse content_block_start: %v", err)
+			a.logger.Errorf("failed to parse content_block_start: %v", err)
 			return
 		}
 		if blockStart.ContentBlock.Type == "tool_use" {
@@ -313,7 +313,7 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 	case "content_block_delta":
 		var blockDelta anthropic_Response_ContentBlockDelta
 		if err := json.Unmarshal([]byte(data), &blockDelta); err != nil {
-			a.logger.Error("failed to parse content_block_delta: %v", err)
+			a.logger.Errorf("failed to parse content_block_delta: %v", err)
 			return
 		}
 		if blockDelta.Delta.Type == "text_delta" && blockDelta.Delta.Text != "" {
@@ -343,7 +343,7 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 	case "message_delta":
 		var msgDelta anthropic_Response_MessageDelta
 		if err := json.Unmarshal([]byte(data), &msgDelta); err != nil {
-			a.logger.Error("failed to parse message_delta: %v", err)
+			a.logger.Errorf("failed to parse message_delta: %v", err)
 			return
 		}
 		if a.usage != nil && msgDelta.Usage != nil {
@@ -366,7 +366,7 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 			}}
 		}
 	default:
-		a.logger.Error("unknown SSE event type: %s", event)
+		a.logger.Errorf("unknown SSE event type: %s", event)
 	}
 }
 
@@ -457,7 +457,7 @@ func (a *Anthropic) estimateCost(usage anthropic_Response_Usage) float64 {
 	if c, ok := costs[a.model]; ok {
 		cost = &c
 	} else {
-		a.logger.Error("no cost information available for model %s, using intentionally high default (2x Opus) values", a.model)
+		a.logger.Errorf("no cost information available for model %s, using intentionally high default (2x Opus) values", a.model)
 		cost = &costConfig{
 			inputTokens:      30,
 			cacheReadTokens:  3,
@@ -476,7 +476,7 @@ func (a *Anthropic) estimateCost(usage anthropic_Response_Usage) float64 {
 		millionOutputTokens*cost.outputTokens
 	costWithoutCache := (millionInputTokens+millionCacheCreationInputTokens+millionCacheReadInputTokens)*cost.inputTokens +
 		millionOutputTokens*cost.outputTokens
-	a.logger.Debug("Anthropic cost estimate: $%.6f (without cache), $%.6f (with cache), saved $%.6f or %.2f%%",
+	a.logger.Debugf("Anthropic cost estimate: $%.6f (without cache), $%.6f (with cache), saved $%.6f or %.2f%%",
 		costWithoutCache, costWithCache, costWithoutCache-costWithCache, (costWithoutCache-costWithCache)/costWithoutCache*100)
 	return costWithCache
 }

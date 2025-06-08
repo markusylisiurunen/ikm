@@ -226,7 +226,7 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 				return
 			}
 			if chunk.Usage != nil {
-				o.logger.Debug("OpenRouter usage: %d prompt tokens (cached %d or %.2f%%), %d completion tokens, total cost $%.6f",
+				o.logger.Debugf("OpenRouter usage: %d prompt tokens (cached %d or %.2f%%), %d completion tokens, total cost $%.6f",
 					chunk.Usage.PromptTokens,
 					chunk.Usage.PromptTokensDetails.CachedTokens,
 					float64(chunk.Usage.PromptTokensDetails.CachedTokens)/float64(chunk.Usage.PromptTokens)*100,
@@ -314,7 +314,7 @@ func (o *OpenRouter) request(
 		case 3:
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "high"}
 		default:
-			o.logger.Error("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
+			o.logger.Errorf("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
 		}
 	} else if config.reasoningMaxTokens > 0 {
 		payload.Reasoning = &openRouter_Request_Reasoning{MaxTokens: config.reasoningMaxTokens}
@@ -339,7 +339,7 @@ func (o *OpenRouter) request(
 	if err := encoder.Encode(payload); err != nil {
 		return nil, fmt.Errorf("error marshalling request: %w", err)
 	}
-	o.logger.Debug("OpenRouter request payload: %s", data.String())
+	o.logger.Debugj("OpenRouter request payload", data.Bytes())
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", &data)
 	if err != nil {

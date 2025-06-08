@@ -65,7 +65,7 @@ func (t *todoReadTool) Spec() (string, string, json.RawMessage) {
 
 func (t *todoReadTool) Call(ctx context.Context, _ string) (string, error) {
 	todoList := loadTodoList()
-	t.logger.Debug("todo_read operation succeeded: found %d items", len(todoList.Items))
+	t.logger.Debugf("todo_read operation succeeded: found %d items", len(todoList.Items))
 	return todoReadToolResult{Items: todoList.Items}.result()
 }
 
@@ -135,31 +135,31 @@ func (t *todoWriteTool) Spec() (string, string, json.RawMessage) {
 
 func (t *todoWriteTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("todo_write tool called with invalid JSON arguments")
+		t.logger.Errorf("todo_write tool called with invalid JSON arguments")
 		return todoWriteToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	todosData := gjson.Get(args, "todos")
 	if !todosData.Exists() {
-		t.logger.Error("todo_write operation failed: todos parameter is required")
+		t.logger.Errorf("todo_write operation failed: todos parameter is required")
 		return todoWriteToolResult{Error: "todos parameter is required"}.result()
 	}
 	var items []TodoItem
 	if err := json.Unmarshal([]byte(todosData.Raw), &items); err != nil {
-		t.logger.Error("todo_write operation failed: invalid todos format: %s", err.Error())
+		t.logger.Errorf("todo_write operation failed: invalid todos format: %s", err.Error())
 		return todoWriteToolResult{Error: fmt.Sprintf("invalid todos format: %s", err.Error())}.result()
 	}
 	// validate all items have required fields and valid status
 	for i, item := range items {
 		if item.ID == "" {
-			t.logger.Error("todo_write operation failed: item %d missing id", i)
+			t.logger.Errorf("todo_write operation failed: item %d missing id", i)
 			return todoWriteToolResult{Error: fmt.Sprintf("item %d missing id", i)}.result()
 		}
 		if item.Content == "" {
-			t.logger.Error("todo_write operation failed: item %d missing content", i)
+			t.logger.Errorf("todo_write operation failed: item %d missing content", i)
 			return todoWriteToolResult{Error: fmt.Sprintf("item %d missing content", i)}.result()
 		}
 		if !isValidStatus(item.Status) {
-			t.logger.Error("todo_write operation failed: item %d has invalid status: %s", i, item.Status)
+			t.logger.Errorf("todo_write operation failed: item %d has invalid status: %s", i, item.Status)
 			return todoWriteToolResult{Error: fmt.Sprintf("item %d has invalid status: %s", i, item.Status)}.result()
 		}
 	}
@@ -173,7 +173,7 @@ func (t *todoWriteTool) Call(ctx context.Context, args string) (string, error) {
 	// store the active todo items (cancelled items are effectively deleted)
 	saveTodoList(TodoList{Items: activeItems})
 	// log the success
-	t.logger.Debug("todo_write operation succeeded: saved %d items (filtered out cancelled items)", len(activeItems))
+	t.logger.Debugf("todo_write operation succeeded: saved %d items (filtered out cancelled items)", len(activeItems))
 	return todoWriteToolResult{Ok: true}.result()
 }
 

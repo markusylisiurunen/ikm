@@ -159,7 +159,7 @@ func Initial(
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
 	if err := m.configureModel(m.openRouterModel); err != nil {
-		m.logger.Error("failed to configure model %s: %v", m.openRouterModel, err)
+		m.logger.Errorf("failed to configure model %s: %v", m.openRouterModel, err)
 		m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", m.openRouterModel, err)
 	}
 	m.agent.SetSystem(m.mode.system)
@@ -198,7 +198,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if !errors.Is(msg.err, context.Canceled) {
-				m.logger.Error(msg.err.Error())
+				m.logger.Errorf(msg.err.Error())
 				m.errorMsg = msg.err.Error()
 			}
 			m.viewport.SetContent(m.renderContent())
@@ -789,13 +789,13 @@ func (m *Model) handleCopySlashCommand(args []string) {
 		}
 		jsonMessagesData, err := json.MarshalIndent(jsonMessages, "", "  ")
 		if err != nil {
-			m.logger.Error("failed to marshal messages to JSON: %v", err)
+			m.logger.Errorf("failed to marshal messages to JSON: %v", err)
 			return
 		}
 		cmd := exec.Command("pbcopy")
 		cmd.Stdin = strings.NewReader(string(jsonMessagesData))
 		if err := cmd.Run(); err != nil {
-			m.logger.Error("failed to copy to clipboard: %v", err)
+			m.logger.Errorf("failed to copy to clipboard: %v", err)
 		}
 		return
 	}
@@ -836,7 +836,7 @@ func (m *Model) handleCopySlashCommand(args []string) {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(content)
 	if err := cmd.Run(); err != nil {
-		m.logger.Error("failed to copy to clipboard: %v", err)
+		m.logger.Errorf("failed to copy to clipboard: %v", err)
 	}
 }
 
@@ -858,7 +858,7 @@ func (m *Model) handleModelSlashCommand(args []string) {
 		if m.getModelSlug(id) == args[0] {
 			m.openRouterModel = id
 			if err := m.configureModel(id); err != nil {
-				m.logger.Error("failed to configure model %s: %v", id, err)
+				m.logger.Errorf("failed to configure model %s: %v", id, err)
 				m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", id, err)
 				m.viewport.SetContent(m.renderContent())
 				m.viewport.GotoBottom()
@@ -960,7 +960,7 @@ func (m Model) registerTools(model llm.Model) {
 	if !m.isToolDisabled("bash") {
 		model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
 	} else {
-		m.logger.Debug("skipped disabled tool: bash")
+		m.logger.Debugf("skipped disabled tool: bash")
 	}
 	if !m.isToolDisabled("fs") {
 		model.Register(tool.NewFSList().SetLogger(m.logger))
@@ -968,12 +968,12 @@ func (m Model) registerTools(model llm.Model) {
 		model.Register(tool.NewFSReplace().SetLogger(m.logger))
 		model.Register(tool.NewFSWrite().SetLogger(m.logger))
 	} else {
-		m.logger.Debug("skipped disabled tool: fs")
+		m.logger.Debugf("skipped disabled tool: fs")
 	}
 	if !m.isToolDisabled("llm") {
 		model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
 	} else {
-		m.logger.Debug("skipped disabled tool: llm")
+		m.logger.Debugf("skipped disabled tool: llm")
 	}
 	if !m.isToolDisabled("task") {
 		model.Register(tool.NewTask(
@@ -982,18 +982,18 @@ func (m Model) registerTools(model llm.Model) {
 			m.fastButCapableModel, m.thoroughButCostlyModel,
 		).SetLogger(m.logger))
 	} else {
-		m.logger.Debug("skipped disabled tool: task")
+		m.logger.Debugf("skipped disabled tool: task")
 	}
 	if !m.isToolDisabled("think") {
 		model.Register(tool.NewThink().SetLogger(m.logger))
 	} else {
-		m.logger.Debug("skipped disabled tool: think")
+		m.logger.Debugf("skipped disabled tool: think")
 	}
 	if !m.isToolDisabled("todo") {
 		model.Register(tool.NewTodoRead().SetLogger(m.logger))
 		model.Register(tool.NewTodoWrite().SetLogger(m.logger))
 	} else {
-		m.logger.Debug("skipped disabled tool: todo")
+		m.logger.Debugf("skipped disabled tool: todo")
 	}
 }
 

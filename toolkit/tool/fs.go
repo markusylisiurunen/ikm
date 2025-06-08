@@ -69,24 +69,24 @@ func (t *fsListTool) Spec() (string, string, json.RawMessage) {
 
 func (t *fsListTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("fs_list tool called with invalid JSON arguments")
+		t.logger.Errorf("fs_list tool called with invalid JSON arguments")
 		return fsListToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	// validate the provided path
 	path := gjson.Get(args, "path").String()
 	absPath, err := validatePath(path)
 	if err != nil {
-		t.logger.Error("fs_list operation failed: %s", err.Error())
+		t.logger.Errorf("fs_list operation failed: %s", err.Error())
 		return fsListToolResult{Error: err.Error()}.result()
 	}
 	// check if the path exists and is a directory
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {
-		t.logger.Error("fs_list operation failed: %s", err.Error())
+		t.logger.Errorf("fs_list operation failed: %s", err.Error())
 		return fsListToolResult{Error: fmt.Sprintf("failed to stat path: %s", err.Error())}.result()
 	}
 	if !fileInfo.IsDir() {
-		t.logger.Error("fs_list operation failed: path is not a directory")
+		t.logger.Errorf("fs_list operation failed: path is not a directory")
 		return fsListToolResult{Error: "path must be a directory"}.result()
 	}
 	// change to the specified directory and run git ls-files
@@ -98,23 +98,23 @@ func (t *fsListTool) Call(ctx context.Context, args string) (string, error) {
 	err = cmd.Run()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		t.logger.Error("fs_list operation failed: %s", stderr.String())
+		t.logger.Errorf("fs_list operation failed: %s", stderr.String())
 		return fsListToolResult{Error: fmt.Sprintf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())}.result()
 	}
 	if err != nil {
-		t.logger.Error("fs_list operation failed: %s", err.Error())
+		t.logger.Errorf("fs_list operation failed: %s", err.Error())
 		return fsListToolResult{Error: fmt.Sprintf("command failed: %s", err.Error())}.result()
 	}
 	// process the output
 	output := strings.TrimSpace(stdout.String())
 	if output == "" {
-		t.logger.Debug("fs_list operation succeeded: no files found")
+		t.logger.Debugf("fs_list operation succeeded: no files found")
 		return fsListToolResult{Files: []string{}}.result()
 	}
 	files := strings.Split(output, "\n")
 	if len(files) > fsListToolMaxFileCount {
 		err := fmt.Errorf("too many files to list: %d exceeds limit of %d", len(files), fsListToolMaxFileCount)
-		t.logger.Error("fs_list operation failed: %s", err.Error())
+		t.logger.Errorf("fs_list operation failed: %s", err.Error())
 		return fsListToolResult{Error: err.Error()}.result()
 	}
 	// convert relative paths to absolute paths
@@ -125,7 +125,7 @@ func (t *fsListTool) Call(ctx context.Context, args string) (string, error) {
 			absFiles = append(absFiles, absFile)
 		}
 	}
-	t.logger.Debug("fs_list operation succeeded: found %d files", len(absFiles))
+	t.logger.Debugf("fs_list operation succeeded: found %d files", len(absFiles))
 	return fsListToolResult{Files: absFiles}.result()
 }
 
@@ -193,7 +193,7 @@ func (t *fsReadTool) Spec() (string, string, json.RawMessage) {
 
 func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("fs_read tool called with invalid JSON arguments")
+		t.logger.Errorf("fs_read tool called with invalid JSON arguments")
 		return fsReadToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	// validate the provided path and parameters
@@ -203,18 +203,18 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 	noLineNumbers := gjson.Get(args, "no_line_numbers").Bool()
 	absPath, err := validatePath(filePath)
 	if err != nil {
-		t.logger.Error("fs_read operation failed: %s", err.Error())
+		t.logger.Errorf("fs_read operation failed: %s", err.Error())
 		return fsReadToolResult{Error: err.Error()}.result()
 	}
 	// check if the file exists and is readable
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {
-		t.logger.Error("fs_read operation failed: %s", err.Error())
+		t.logger.Errorf("fs_read operation failed: %s", err.Error())
 		return fsReadToolResult{Error: fmt.Sprintf("failed to stat file: %s", err.Error())}.result()
 	}
 	if fileInfo.Size() > fsReadToolMaxFileSize {
 		err := fmt.Errorf("file size exceeds limit of %d bytes", fsReadToolMaxFileSize)
-		t.logger.Error("fs_read operation failed: %s", err.Error())
+		t.logger.Errorf("fs_read operation failed: %s", err.Error())
 		return fsReadToolResult{Error: err.Error()}.result()
 	}
 	// read the file using appropriate command based on offset and limit
@@ -234,11 +234,11 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 	err = cmd.Run()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		t.logger.Error("fs_read operation failed: %s", stderr.String())
+		t.logger.Errorf("fs_read operation failed: %s", stderr.String())
 		return fsReadToolResult{Error: fmt.Sprintf("command failed with exit code %d: %s", exitErr.ExitCode(), stderr.String())}.result()
 	}
 	if err != nil {
-		t.logger.Error("fs_read operation failed: %s", err.Error())
+		t.logger.Errorf("fs_read operation failed: %s", err.Error())
 		return fsReadToolResult{Error: fmt.Sprintf("command failed: %s", err.Error())}.result()
 	}
 	// add line numbers to the output
@@ -260,7 +260,7 @@ func (t *fsReadTool) Call(ctx context.Context, args string) (string, error) {
 			content += "\n"
 		}
 	}
-	t.logger.Debug("fs_read operation for path %q succeeded", filePath)
+	t.logger.Debugf("fs_read operation for path %q succeeded", filePath)
 	return fsReadToolResult{Content: content}.result()
 }
 
@@ -319,38 +319,38 @@ func (t *fsWriteTool) Spec() (string, string, json.RawMessage) {
 
 func (t *fsWriteTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("fs_write tool called with invalid JSON arguments")
+		t.logger.Errorf("fs_write tool called with invalid JSON arguments")
 		return fsWriteToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	// validate the provided path and content
 	filePath := gjson.Get(args, "path").String()
 	content := gjson.Get(args, "content").String()
 	if content == "" {
-		t.logger.Error("fs_write operation failed: content parameter is required")
+		t.logger.Errorf("fs_write operation failed: content parameter is required")
 		return fsWriteToolResult{Error: "content parameter is required"}.result()
 	}
 	if len(content) > fsWriteToolMaxFileSize {
 		err := fmt.Errorf("content size exceeds limit of %d bytes", fsWriteToolMaxFileSize)
-		t.logger.Error("fs_write operation failed: %s", err.Error())
+		t.logger.Errorf("fs_write operation failed: %s", err.Error())
 		return fsWriteToolResult{Error: err.Error()}.result()
 	}
 	absPath, err := validatePath(filePath)
 	if err != nil {
-		t.logger.Error("fs_write operation failed: %s", err.Error())
+		t.logger.Errorf("fs_write operation failed: %s", err.Error())
 		return fsWriteToolResult{Error: err.Error()}.result()
 	}
 	// make sure the parent directory exists
 	parentDir := filepath.Dir(absPath)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
-		t.logger.Error("fs_write operation failed: %s", err.Error())
+		t.logger.Errorf("fs_write operation failed: %s", err.Error())
 		return fsWriteToolResult{Error: fmt.Sprintf("failed to create parent directories: %s", err.Error())}.result()
 	}
 	// write the content to the file
 	if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
-		t.logger.Error("fs_write operation failed: %s", err.Error())
+		t.logger.Errorf("fs_write operation failed: %s", err.Error())
 		return fsWriteToolResult{Error: fmt.Sprintf("failed to write file: %s", err.Error())}.result()
 	}
-	t.logger.Debug("fs_write operation for path %q succeeded", filePath)
+	t.logger.Debugf("fs_write operation for path %q succeeded", filePath)
 	return fsWriteToolResult{}.result()
 }
 
@@ -417,7 +417,7 @@ func (t *fsReplaceTool) Spec() (string, string, json.RawMessage) {
 
 func (t *fsReplaceTool) Call(ctx context.Context, args string) (string, error) {
 	if !gjson.Valid(args) {
-		t.logger.Error("fs_replace tool called with invalid JSON arguments")
+		t.logger.Errorf("fs_replace tool called with invalid JSON arguments")
 		return fsReplaceToolResult{Error: "invalid JSON arguments"}.result()
 	}
 	// validate the provided path and parameters
@@ -426,33 +426,33 @@ func (t *fsReplaceTool) Call(ctx context.Context, args string) (string, error) {
 	newStr := gjson.Get(args, "new_string").String()
 	replaceAll := gjson.Get(args, "replace_all").Bool()
 	if oldStr == "" {
-		t.logger.Error("fs_replace operation failed: old_string parameter is required")
+		t.logger.Errorf("fs_replace operation failed: old_string parameter is required")
 		return fsReplaceToolResult{Error: "old_string parameter is required"}.result()
 	}
 	if oldStr == newStr {
-		t.logger.Error("fs_replace operation failed: old_string and new_string must be different")
+		t.logger.Errorf("fs_replace operation failed: old_string and new_string must be different")
 		return fsReplaceToolResult{Error: "old_string and new_string must be different"}.result()
 	}
 	absPath, err := validatePath(filePath)
 	if err != nil {
-		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 		return fsReplaceToolResult{Error: err.Error()}.result()
 	}
 	// check if the file exists and is readable
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {
-		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 		return fsReplaceToolResult{Error: fmt.Sprintf("failed to stat file: %s", err.Error())}.result()
 	}
 	if fileInfo.Size() > fsReplaceToolMaxFileSize {
 		err := fmt.Errorf("file size exceeds limit of %d bytes", fsReplaceToolMaxFileSize)
-		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 		return fsReplaceToolResult{Error: err.Error()}.result()
 	}
 	// read the file content
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 		return fsReplaceToolResult{Error: fmt.Sprintf("failed to read file: %s", err.Error())}.result()
 	}
 	contentStr := string(content)
@@ -461,12 +461,12 @@ func (t *fsReplaceTool) Call(ctx context.Context, args string) (string, error) {
 		occurrences := strings.Count(contentStr, oldStr)
 		if occurrences == 0 {
 			err := fmt.Errorf("old_string not found in file")
-			t.logger.Error("fs_replace operation failed: %s", err.Error())
+			t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 			return fsReplaceToolResult{Error: err.Error()}.result()
 		}
 		if occurrences > 1 {
 			err := fmt.Errorf("old_string appears %d times in file, must be unique for single replacement", occurrences)
-			t.logger.Error("fs_replace operation failed: %s", err.Error())
+			t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 			return fsReplaceToolResult{Error: err.Error()}.result()
 		}
 	}
@@ -479,14 +479,14 @@ func (t *fsReplaceTool) Call(ctx context.Context, args string) (string, error) {
 	// write the modified content back to the file
 	if len(newContent) > fsReplaceToolMaxFileSize {
 		err := fmt.Errorf("new content size exceeds limit of %d bytes", fsReplaceToolMaxFileSize)
-		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 		return fsReplaceToolResult{Error: err.Error()}.result()
 	}
 	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-		t.logger.Error("fs_replace operation failed: %s", err.Error())
+		t.logger.Errorf("fs_replace operation failed: %s", err.Error())
 		return fsReplaceToolResult{Error: fmt.Sprintf("failed to write file: %s", err.Error())}.result()
 	}
-	t.logger.Debug("fs_replace operation for path %q succeeded", filePath)
+	t.logger.Debugf("fs_replace operation for path %q succeeded", filePath)
 	return fsReplaceToolResult{}.result()
 }
 

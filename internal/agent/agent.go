@@ -166,7 +166,7 @@ func (a *Agent) send(ctx context.Context, message string) {
 				}
 			}
 			if msg == nil {
-				a.logger.Error("tool result event without assistant message: %s", e.ID)
+				a.logger.Errorf("tool result event without assistant message: %s", e.ID)
 			} else {
 				var toolCall *llm.ToolCall
 				for _, call := range msg.ToolCalls {
@@ -176,7 +176,7 @@ func (a *Agent) send(ctx context.Context, message string) {
 					}
 				}
 				if toolCall == nil {
-					a.logger.Error("tool result event without matching tool call: %s", e.ID)
+					a.logger.Errorf("tool result event without matching tool call: %s", e.ID)
 				} else {
 					a.messages = append(a.messages, llm.Message{
 						Role:       llm.RoleTool,
@@ -219,7 +219,7 @@ func (a *Agent) notify(event Event) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					a.logger.Error("panic in agent notify: %v", r)
+					a.logger.Errorf("panic in agent notify: %v", r)
 				}
 			}()
 			ch <- event
