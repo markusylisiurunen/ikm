@@ -880,7 +880,7 @@ func (m Model) configureModel(modelName string) error {
 		)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
-			llm.WithTemperature(0.7),
+			llm.WithTemperature(1.0),
 			m.getReasoningEffortOption(),
 		}
 	case "anthropic/claude-sonnet-4":
@@ -889,7 +889,7 @@ func (m Model) configureModel(modelName string) error {
 		)
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
-			llm.WithTemperature(0.7),
+			llm.WithTemperature(1.0),
 			m.getReasoningEffortOption(),
 		}
 	case "google/gemini-2.5-flash-preview-05-20":
