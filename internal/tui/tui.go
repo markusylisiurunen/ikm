@@ -54,9 +54,11 @@ type Model struct {
 	logger          logger.Logger
 	runInBashDocker func(context.Context, string) (int, string, string, error)
 
-	anthropicKey    string
-	openRouterKey   string
-	openRouterModel string
+	anthropicKey  string
+	openRouterKey string
+	openAIKey     string
+
+	model string
 
 	fastButCapableModel    string
 	thoroughButCostlyModel string
@@ -111,7 +113,7 @@ func WithSetDefaultModel(model string) modelOption {
 	return func(m *Model) {
 		for _, id := range m.listModels() {
 			if m.getModelSlug(id) == model {
-				m.openRouterModel = id
+				m.model = id
 				return
 			}
 		}
@@ -134,6 +136,7 @@ func Initial(
 	logger logger.Logger,
 	anthropicKey string,
 	openRouterKey string,
+	openAIKey string,
 	runInBashDocker func(context.Context, string) (int, string, string, error),
 	opts ...modelOption,
 ) Model {
@@ -142,6 +145,7 @@ func Initial(
 		runInBashDocker: runInBashDocker,
 		anthropicKey:    anthropicKey,
 		openRouterKey:   openRouterKey,
+		openAIKey:       openAIKey,
 		reasoningEffort: 2, // default to medium effort
 	}
 	for _, opt := range opts {
@@ -151,16 +155,16 @@ func Initial(
 		panic("no modes defined or default mode not set")
 	}
 	// init the model
-	if m.openRouterModel == "" {
-		m.openRouterModel = m.listModels()[0]
+	if m.model == "" {
+		m.model = m.listModels()[0]
 	}
 	m.fastButCapableModel = "google/gemini-2.5-flash-preview-05-20"
 	m.thoroughButCostlyModel = "anthropic/claude-sonnet-4"
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
-	if err := m.configureModel(m.openRouterModel); err != nil {
-		m.logger.Errorf("failed to configure model %s: %v", m.openRouterModel, err)
-		m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", m.openRouterModel, err)
+	if err := m.configureModel(m.model); err != nil {
+		m.logger.Errorf("failed to configure model %s: %v", m.model, err)
+		m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", m.model, err)
 	}
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
@@ -620,7 +624,7 @@ func (m Model) renderFooter() string {
 	_, usage := m.agent.GetHistoryState()
 	var meta string
 	meta += fmt.Sprintf("%s, ", m.mode.name)
-	meta += fmt.Sprintf("%s, ", m.getModelSlug(m.openRouterModel))
+	meta += fmt.Sprintf("%s, ", m.getModelSlug(m.model))
 	meta += fmt.Sprintf("cost: %.3f €, ", usage.TotalCost)
 	meta += fmt.Sprintf("tokens: %d", usage.PromptTokens+usage.CompletionTokens)
 	if isRunning {
@@ -856,7 +860,7 @@ func (m *Model) handleModelSlashCommand(args []string) {
 	}
 	for _, id := range m.listModels() {
 		if m.getModelSlug(id) == args[0] {
-			m.openRouterModel = id
+			m.model = id
 			if err := m.configureModel(id); err != nil {
 				m.logger.Errorf("failed to configure model %s: %v", id, err)
 				m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", id, err)
@@ -916,9 +920,10 @@ func (m Model) configureModel(modelName string) error {
 			llm.WithMaxTokens(32_768),
 		}
 	case "openai/codex-mini":
-		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		model = llm.NewOpenAI(m.logger, m.openAIKey, "codex-mini-latest")
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "openai/gpt-4.1":
@@ -934,17 +939,15 @@ func (m Model) configureModel(modelName string) error {
 			llm.WithTemperature(0.7),
 		}
 	case "openai/o3":
-		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		model = llm.NewOpenAI(m.logger, m.openAIKey, "o3")
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
-			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "openai/o4-mini":
-		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		model = llm.NewOpenAI(m.logger, m.openAIKey, "o4-mini")
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
-			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
 	case "qwen/qwen3-32b":

@@ -58,6 +58,7 @@ type config struct {
 	model           string
 	anthropicKey    string
 	openRouterKey   string
+	openAIKey       string
 }
 
 func (c *config) read() {
@@ -118,6 +119,7 @@ func (c *config) read() {
 	c.model = *model
 	c.anthropicKey = os.Getenv("ANTHROPIC_KEY")
 	c.openRouterKey = os.Getenv("OPENROUTER_KEY")
+	c.openAIKey = os.Getenv("OPENAI_KEY")
 }
 
 func main() {
@@ -129,6 +131,9 @@ func main() {
 	}
 	if cfg.openRouterKey == "" {
 		log.Fatal("OPENROUTER_KEY environment variable is not set")
+	}
+	if cfg.openAIKey == "" {
+		log.Fatal("OPENAI_KEY environment variable is not set")
 	}
 	// setup the Docker container for running bash commands
 	if err := buildBashDockerIfNeeded(); err != nil {
@@ -154,7 +159,7 @@ func main() {
 	if cfg.mode != "agent" && cfg.mode != "dev" && cfg.mode != "raw" {
 		log.Fatalf("invalid mode: %s, must be one of: agent, dev, raw", cfg.mode)
 	}
-	model := tui.Initial(debugLogger, cfg.anthropicKey, cfg.openRouterKey, runInBashDocker,
+	model := tui.Initial(debugLogger, cfg.anthropicKey, cfg.openRouterKey, cfg.openAIKey, runInBashDocker,
 		tui.WithDynamicMode("agent", func() string { return readSystemPromptWithCustomInstructions(agentPrompt) }),
 		tui.WithDynamicMode("dev", func() string { return readSystemPromptWithCustomInstructions(devPrompt) }),
 		tui.WithDynamicMode("raw", func() string { return readSystemPromptWithCustomInstructions(rawPrompt) }),
