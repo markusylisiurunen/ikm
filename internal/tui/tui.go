@@ -158,7 +158,7 @@ func Initial(
 	if m.model == "" {
 		m.model = m.listModels()[0]
 	}
-	m.fastButCapableModel = "google/gemini-2.5-flash-preview-05-20"
+	m.fastButCapableModel = "google/gemini-2.5-flash"
 	m.thoroughButCostlyModel = "anthropic/claude-sonnet-4"
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
@@ -639,8 +639,8 @@ func (m Model) listModels() []string {
 	return []string{
 		"anthropic/claude-opus-4",
 		"anthropic/claude-sonnet-4",
-		"google/gemini-2.5-flash-preview-05-20",
-		"google/gemini-2.5-pro-preview",
+		"google/gemini-2.5-flash",
+		"google/gemini-2.5-pro",
 		"mistralai/devstral-small",
 		"openai/codex-mini",
 		"openai/gpt-4.1",
@@ -657,9 +657,9 @@ func (m Model) getModelSlug(model string) string {
 		return "claude-opus-4"
 	case "anthropic/claude-sonnet-4":
 		return "claude-sonnet-4"
-	case "google/gemini-2.5-flash-preview-05-20":
+	case "google/gemini-2.5-flash":
 		return "gemini-2.5-flash"
-	case "google/gemini-2.5-pro-preview":
+	case "google/gemini-2.5-pro":
 		return "gemini-2.5-pro"
 	case "mistralai/devstral-small":
 		return "devstral-small"
@@ -896,14 +896,14 @@ func (m Model) configureModel(modelName string) error {
 			llm.WithTemperature(1.0),
 			m.getReasoningEffortOption(),
 		}
-	case "google/gemini-2.5-flash-preview-05-20":
+	case "google/gemini-2.5-flash":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),
 			llm.WithTemperature(0.7),
 			m.getReasoningEffortOption(),
 		}
-	case "google/gemini-2.5-pro-preview":
+	case "google/gemini-2.5-pro":
 		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
 		streamOptions = []llm.StreamOption{
 			llm.WithMaxTokens(32_768),

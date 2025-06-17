@@ -54,8 +54,8 @@ func NewLLM(openRouterToken string) *llmTool {
 		openRouterToken: openRouterToken,
 		availableModels: map[string]string{
 			"claude-sonnet-4":  "anthropic/claude-sonnet-4",
-			"gemini-2.5-flash": "google/gemini-2.5-flash-preview-05-20",
-			"gemini-2.5-pro":   "google/gemini-2.5-pro-preview",
+			"gemini-2.5-flash": "google/gemini-2.5-flash",
+			"gemini-2.5-pro":   "google/gemini-2.5-pro",
 		},
 	}
 }
