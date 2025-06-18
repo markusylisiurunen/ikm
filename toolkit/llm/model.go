@@ -10,8 +10,7 @@ import (
 type Event any
 
 type ThinkingDeltaEvent struct {
-	Thinking  string
-	Signature string
+	Thinking string
 }
 
 type ContentDeltaEvent struct {
@@ -72,13 +71,12 @@ func NewTextContentPart(text string) TextContentPart {
 }
 
 type ThinkingContentPart struct {
-	Type      string
-	Thinking  string
-	Signature string
+	Type     string
+	Thinking string
 }
 
-func NewThinkingContentPart(thinking, signature string) ThinkingContentPart {
-	return ThinkingContentPart{Type: "thinking", Thinking: thinking, Signature: signature}
+func NewThinkingContentPart(thinking string) ThinkingContentPart {
+	return ThinkingContentPart{Type: "thinking", Thinking: thinking}
 }
 
 type ImageContentPart struct {

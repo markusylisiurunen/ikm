@@ -290,8 +290,7 @@ func (o *OpenAI) processSSEEvent(event, data string, ch chan<- Event, toolCallBu
 		}
 		if outputItemDone.Item.Type == "reasoning" {
 			ch <- &ThinkingDeltaEvent{
-				Signature: "",
-				Thinking:  outputItemDone.Item.EncryptedContent,
+				Thinking: outputItemDone.Item.EncryptedContent,
 			}
 			return
 		}
