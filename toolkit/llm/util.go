@@ -27,14 +27,11 @@ func (b *messageBuilder) process(event Event) {
 			return
 		}
 		if len(b.msgs[len(b.msgs)-1].Content) == 0 {
-			b.msgs[len(b.msgs)-1].Content = append(b.msgs[len(b.msgs)-1].Content, NewThinkingContentPart("", ""))
+			b.msgs[len(b.msgs)-1].Content = append(b.msgs[len(b.msgs)-1].Content, NewThinkingContentPart(""))
 		}
 		if p, ok := b.msgs[len(b.msgs)-1].Content[0].(ThinkingContentPart); ok {
 			// append to the last thinking content part
 			p.Thinking += e.Thinking
-			if e.Signature != "" {
-				p.Signature = e.Signature
-			}
 			b.msgs[len(b.msgs)-1].Content[0] = p
 		}
 	case *ContentDeltaEvent:

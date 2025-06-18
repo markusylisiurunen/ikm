@@ -52,14 +52,26 @@ func (a *Anthropic) Register(tool Tool) {
 
 func (a *Anthropic) Stream(ctx context.Context, messages []Message, opts ...StreamOption) <-chan Event {
 	config := a.generationConfig(opts...)
-	return a.streamTurns(ctx, messages, config)
+	system, anthropicMsgs, err := a.toAnthropic(messages)
+	if err != nil {
+		ch := make(chan Event, 1)
+		ch <- &ErrorEvent{Err: err}
+		close(ch)
+		return ch
+	}
+	cloned := make([]Message, len(messages))
+	copy(cloned, messages)
+	return a.streamTurns(ctx, system, anthropicMsgs, cloned, config)
 }
-func (a *Anthropic) streamTurns(ctx context.Context, messages []Message, config streamConfig) <-chan Event {
+
+func (a *Anthropic) streamTurns(ctx context.Context, system string, aMessages []anthropic_Message, messages []Message, config streamConfig) <-chan Event {
 	ch := make(chan Event)
 	go func() {
 		defer close(ch)
-		cloned := make([]Message, len(messages))
-		copy(cloned, messages)
+		clonedAnthropic := make([]anthropic_Message, len(aMessages))
+		copy(clonedAnthropic, aMessages)
+		clonedPublic := make([]Message, len(messages))
+		copy(clonedPublic, messages)
 		for turn := range config.maxTurns {
 			select {
 			case <-ctx.Done():
@@ -67,28 +79,28 @@ func (a *Anthropic) streamTurns(ctx context.Context, messages []Message, config 
 				return
 			default:
 			}
-			out := tee(a.streamTurn(ctx, cloned, config), ch)
+			out := tee(a.streamTurn(ctx, system, clonedAnthropic, &clonedAnthropic, config), ch)
 			builder := newMessageBuilder()
 			for event := range out {
 				builder.process(event)
 			}
-			messages, _, err := builder.result()
+			msgs, _, err := builder.result()
 			if err != nil {
 				ch <- &ErrorEvent{Err: fmt.Errorf("error processing events: %w", err)}
 				return
 			}
-			if len(messages) != 1 {
-				ch <- &ErrorEvent{Err: fmt.Errorf("expected exactly one message, got %d", len(messages))}
+			if len(msgs) != 1 {
+				ch <- &ErrorEvent{Err: fmt.Errorf("expected exactly one message, got %d", len(msgs))}
 				return
 			}
-			if len(messages[0].ToolCalls) == 0 {
+			if len(msgs[0].ToolCalls) == 0 {
 				return
 			}
-			cloned = append(cloned, messages[0])
-			if len(messages[0].ToolCalls) > 0 {
-				toolResultEvents := make([]*ToolResultEvent, len(messages[0].ToolCalls))
+			clonedPublic = append(clonedPublic, msgs[0])
+			if len(msgs[0].ToolCalls) > 0 {
+				toolResultEvents := make([]*ToolResultEvent, len(msgs[0].ToolCalls))
 				g, gctx := errgroup.WithContext(ctx)
-				for idx, toolCall := range messages[0].ToolCalls {
+				for idx, toolCall := range msgs[0].ToolCalls {
 					g.Go(func() error {
 						var tool Tool
 						for _, t := range a.tools {
@@ -117,30 +129,37 @@ func (a *Anthropic) streamTurns(ctx context.Context, messages []Message, config 
 					ch <- event
 					msg := Message{
 						Role:       RoleTool,
-						Name:       messages[0].ToolCalls[idx].Function.Name,
-						ToolCallID: messages[0].ToolCalls[idx].ID,
+						Name:       msgs[0].ToolCalls[idx].Function.Name,
+						ToolCallID: msgs[0].ToolCalls[idx].ID,
 					}
 					if event.Error != nil {
 						msg.Content = ContentParts{NewTextContentPart("Error: " + event.Error.Error())}
 					} else {
 						msg.Content = ContentParts{NewTextContentPart(event.Result)}
 					}
-					cloned = append(cloned, msg)
+					clonedPublic = append(clonedPublic, msg)
+					var aToolMsg anthropic_Message
+					if err := aToolMsg.from(msg); err != nil {
+						ch <- &ErrorEvent{Err: fmt.Errorf("error converting tool result message: %w", err)}
+						return
+					}
+					clonedAnthropic = append(clonedAnthropic, aToolMsg)
 				}
 			}
-			if turn >= config.maxTurns-1 || (config.stopCondition != nil && config.stopCondition(turn, cloned)) {
+			if turn >= config.maxTurns-1 || (config.stopCondition != nil && config.stopCondition(turn, clonedPublic)) {
 				return
 			}
 		}
 	}()
 	return ch
 }
-func (a *Anthropic) streamTurn(ctx context.Context, messages []Message, config streamConfig) <-chan Event {
+
+func (a *Anthropic) streamTurn(ctx context.Context, system string, messages []anthropic_Message, history *[]anthropic_Message, config streamConfig) <-chan Event {
 	a.usage = nil
 	ch := make(chan Event)
 	go func() {
 		defer close(ch)
-		resp, err := a.request(ctx, messages, config)
+		resp, err := a.request(ctx, system, messages, config)
 		if err != nil {
 			ch <- &ErrorEvent{Err: err}
 			return
@@ -156,6 +175,7 @@ func (a *Anthropic) streamTurn(ctx context.Context, messages []Message, config s
 			return
 		}
 		toolCallBuffer := make([]*ToolUseEvent, 32)
+		builder := newAnthropicMessageBuilder()
 		var currentEvent string
 		var currentData string
 		reader := bufio.NewReader(resp.Body)
@@ -177,6 +197,11 @@ func (a *Anthropic) streamTurn(ctx context.Context, messages []Message, config s
 			if line == "" {
 				if currentEvent != "" && currentData != "" {
 					a.processSSEEvent(currentEvent, currentData, ch, toolCallBuffer)
+					if blockEvent, ok := a.updateAnthropicBuilder(currentEvent, currentData, builder); ok {
+						if blockEvent == "message_stop" {
+							*history = append(*history, builder.finish())
+						}
+					}
 				}
 				currentEvent = ""
 				currentData = ""
@@ -190,33 +215,29 @@ func (a *Anthropic) streamTurn(ctx context.Context, messages []Message, config s
 		}
 		if currentEvent != "" && currentData != "" {
 			a.processSSEEvent(currentEvent, currentData, ch, toolCallBuffer)
+			if blockEvent, ok := a.updateAnthropicBuilder(currentEvent, currentData, builder); ok {
+				if blockEvent == "message_stop" {
+					*history = append(*history, builder.finish())
+				}
+			}
 		}
+		// ensure history appended when server closes without message_stop? builder.finish not appended
 	}()
 	return ch
 }
 
-func (a *Anthropic) request(ctx context.Context, messages []Message, config streamConfig) (*http.Response, error) {
+func (a *Anthropic) request(ctx context.Context, system string, messages []anthropic_Message, config streamConfig) (*http.Response, error) {
 	payload := anthropic_Request{
 		MaxTokens:   config.maxTokens,
 		Messages:    []anthropic_Message{},
 		Model:       a.model,
 		Stream:      true,
-		System:      "",
+		System:      system,
 		Temperature: config.temperature,
 		Thinking:    nil,
 		Tools:       nil,
 	}
-	for _, msg := range messages {
-		if msg.Role == RoleSystem {
-			payload.System = msg.Content.Text()
-			continue
-		}
-		var m anthropic_Message
-		if err := m.from(msg); err != nil {
-			return nil, fmt.Errorf("error converting message: %w", err)
-		}
-		payload.Messages = append(payload.Messages, m)
-	}
+	payload.Messages = append(payload.Messages, messages...)
 	a.injectCacheControl(payload.Messages)
 	if config.reasoningEffort > 0 {
 		switch config.reasoningEffort {
@@ -336,7 +357,7 @@ func (a *Anthropic) processSSEEvent(event, data string, ch chan<- Event, toolCal
 		} else if blockDelta.Delta.Type == "thinking_delta" && blockDelta.Delta.Thinking != "" {
 			ch <- &ThinkingDeltaEvent{Thinking: blockDelta.Delta.Thinking}
 		} else if blockDelta.Delta.Type == "signature_delta" && blockDelta.Delta.Signature != "" {
-			ch <- &ThinkingDeltaEvent{Signature: blockDelta.Delta.Signature}
+			// ignore signature deltas in public events
 		}
 	case "content_block_stop":
 		return
@@ -416,6 +437,93 @@ func (a *Anthropic) injectCacheControl(messages []anthropic_Message) {
 	}
 }
 
+func (a *Anthropic) toAnthropic(messages []Message) (string, []anthropic_Message, error) {
+	var system string
+	out := make([]anthropic_Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == RoleSystem {
+			system = msg.Content.Text()
+			continue
+		}
+		var m anthropic_Message
+		if err := m.from(msg); err != nil {
+			return "", nil, err
+		}
+		out = append(out, m)
+	}
+	return system, out, nil
+}
+
+type anthropicMessageBuilder struct {
+	msg       anthropic_Message
+	indexMap  map[int]int
+	toolInput map[int]string
+}
+
+func newAnthropicMessageBuilder() *anthropicMessageBuilder {
+	return &anthropicMessageBuilder{
+		msg:       anthropic_Message{Role: "assistant", Content: []any{}},
+		indexMap:  make(map[int]int),
+		toolInput: make(map[int]string),
+	}
+}
+
+func (b *anthropicMessageBuilder) start(block anthropic_Response_ContentBlockStart) {
+	pos := len(b.msg.Content)
+	b.indexMap[block.Index] = pos
+	switch block.ContentBlock.Type {
+	case "text":
+		b.msg.Content = append(b.msg.Content, anthropic_Message_Text{Type: "text", Text: ""})
+	case "thinking":
+		b.msg.Content = append(b.msg.Content, anthropic_Message_Thinking{Type: "thinking", Thinking: "", Signature: ""})
+	case "tool_use":
+		b.msg.Content = append(b.msg.Content, anthropic_Message_ToolUse{Type: "tool_use", ID: block.ContentBlock.ID, Name: block.ContentBlock.Name, Input: json.RawMessage("{}")})
+		b.toolInput[block.Index] = ""
+	}
+}
+
+func (b *anthropicMessageBuilder) delta(d anthropic_Response_ContentBlockDelta) {
+	pos, ok := b.indexMap[d.Index]
+	if !ok {
+		return
+	}
+	switch d.Delta.Type {
+	case "text_delta":
+		if part, ok := b.msg.Content[pos].(anthropic_Message_Text); ok {
+			part.Text += d.Delta.Text
+			b.msg.Content[pos] = part
+		}
+	case "thinking_delta":
+		if part, ok := b.msg.Content[pos].(anthropic_Message_Thinking); ok {
+			part.Thinking += d.Delta.Thinking
+			b.msg.Content[pos] = part
+		}
+	case "signature_delta":
+		if part, ok := b.msg.Content[pos].(anthropic_Message_Thinking); ok {
+			part.Signature += d.Delta.Signature
+			b.msg.Content[pos] = part
+		}
+	case "input_json_delta":
+		b.toolInput[d.Index] += d.Delta.PartialJSON
+	}
+}
+
+func (b *anthropicMessageBuilder) finish() anthropic_Message {
+	for idx, pos := range b.indexMap {
+		if input, ok := b.toolInput[idx]; ok {
+			if part, ok := b.msg.Content[pos].(anthropic_Message_ToolUse); ok {
+				if input == "" {
+					part.Input = json.RawMessage("{}")
+				} else {
+					part.Input = json.RawMessage(input)
+				}
+				b.msg.Content[pos] = part
+			}
+		}
+	}
+	return b.msg
+}
+
 func (a *Anthropic) generationConfig(opts ...StreamOption) streamConfig {
 	c := streamConfig{
 		maxTokens:          8192,
@@ -479,6 +587,28 @@ func (a *Anthropic) estimateCost(usage anthropic_Response_Usage) float64 {
 	a.logger.Debugf("Anthropic cost estimate: $%.6f (without cache), $%.6f (with cache), saved $%.6f or %.2f%%",
 		costWithoutCache, costWithCache, costWithoutCache-costWithCache, (costWithoutCache-costWithCache)/costWithoutCache*100)
 	return costWithCache
+}
+
+func (a *Anthropic) updateAnthropicBuilder(event, data string, b *anthropicMessageBuilder) (string, bool) {
+	switch event {
+	case "content_block_start":
+		var block anthropic_Response_ContentBlockStart
+		if err := json.Unmarshal([]byte(data), &block); err != nil {
+			a.logger.Errorf("failed to parse content_block_start: %v", err)
+			return "", false
+		}
+		b.start(block)
+	case "content_block_delta":
+		var delta anthropic_Response_ContentBlockDelta
+		if err := json.Unmarshal([]byte(data), &delta); err != nil {
+			a.logger.Errorf("failed to parse content_block_delta: %v", err)
+			return "", false
+		}
+		b.delta(delta)
+	case "message_stop":
+		return "message_stop", true
+	}
+	return event, true
 }
 
 // helper types ------------------------------------------------------------------------------------
