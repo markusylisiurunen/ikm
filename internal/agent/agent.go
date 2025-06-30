@@ -75,7 +75,7 @@ func (a *Agent) SetModel(model llm.Model, options ...llm.StreamOption) {
 	defer a.mux.Unlock()
 	a.model = model
 	a.streamOptions = options
-	a.streamOptions = append(a.streamOptions, llm.WithMaxTurns(16))
+	a.streamOptions = append(a.streamOptions, llm.WithMaxTurns(128))
 }
 
 func (a *Agent) SetSystem(system func() string) {
@@ -120,6 +120,8 @@ func (a *Agent) send(ctx context.Context, message string) {
 	a.notify(&ChangeEvent{})
 	for event := range a.model.Stream(ctx, a.getMessageHistory(), a.streamOptions...) {
 		switch e := event.(type) {
+		case *llm.ThinkingDeltaEvent:
+			continue
 		case *llm.ContentDeltaEvent:
 			a.mux.Lock()
 			if msg := a.messages[len(a.messages)-1]; msg.Role != llm.RoleAssistant {
@@ -164,7 +166,7 @@ func (a *Agent) send(ctx context.Context, message string) {
 				}
 			}
 			if msg == nil {
-				a.logger.Error("tool result event without assistant message: %s", e.ID)
+				a.logger.Errorf("tool result event without assistant message: %s", e.ID)
 			} else {
 				var toolCall *llm.ToolCall
 				for _, call := range msg.ToolCalls {
@@ -174,7 +176,7 @@ func (a *Agent) send(ctx context.Context, message string) {
 					}
 				}
 				if toolCall == nil {
-					a.logger.Error("tool result event without matching tool call: %s", e.ID)
+					a.logger.Errorf("tool result event without matching tool call: %s", e.ID)
 				} else {
 					a.messages = append(a.messages, llm.Message{
 						Role:       llm.RoleTool,
@@ -217,7 +219,7 @@ func (a *Agent) notify(event Event) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					a.logger.Error("panic in agent notify: %v", r)
+					a.logger.Errorf("panic in agent notify: %v", r)
 				}
 			}()
 			ch <- event

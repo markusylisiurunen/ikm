@@ -9,6 +9,11 @@ import (
 
 type Event any
 
+type ThinkingDeltaEvent struct {
+	Thinking  string
+	Signature string
+}
+
 type ContentDeltaEvent struct {
 	Content string
 }
@@ -66,6 +71,16 @@ func NewTextContentPart(text string) TextContentPart {
 	return TextContentPart{Type: "text", Text: text}
 }
 
+type ThinkingContentPart struct {
+	Type      string
+	Thinking  string
+	Signature string
+}
+
+func NewThinkingContentPart(thinking, signature string) ThinkingContentPart {
+	return ThinkingContentPart{Type: "thinking", Thinking: thinking, Signature: signature}
+}
+
 type ImageContentPart struct {
 	Type     string
 	ImageURL string
@@ -112,6 +127,8 @@ func (c ContentParts) Text() string {
 	var sb strings.Builder
 	for _, part := range c {
 		switch p := part.(type) {
+		case ThinkingContentPart:
+			continue
 		case TextContentPart:
 			sb.WriteString(p.Text)
 		case ImageContentPart:
@@ -142,11 +159,12 @@ type Usage struct {
 type StopCondition func(turn int, history []Message) bool
 
 type streamConfig struct {
-	maxTokens       int
-	maxTurns        int
-	reasoningEffort uint8
-	stopCondition   StopCondition
-	temperature     float64
+	maxTokens          int
+	maxTurns           int
+	reasoningEffort    uint8
+	reasoningMaxTokens uint
+	stopCondition      StopCondition
+	temperature        float64
 }
 
 type StreamOption func(*streamConfig)
@@ -157,14 +175,17 @@ func WithMaxTokens(maxTokens int) StreamOption {
 func WithMaxTurns(maxTurns int) StreamOption {
 	return func(c *streamConfig) { c.maxTurns = maxTurns }
 }
-func WithReasoningEffortHigh() StreamOption {
-	return func(c *streamConfig) { c.reasoningEffort = 3 }
+func WithReasoningEffortLow() StreamOption {
+	return func(c *streamConfig) { c.reasoningEffort = 1 }
 }
 func WithReasoningEffortMedium() StreamOption {
 	return func(c *streamConfig) { c.reasoningEffort = 2 }
 }
-func WithReasoningEffortLow() StreamOption {
-	return func(c *streamConfig) { c.reasoningEffort = 1 }
+func WithReasoningEffortHigh() StreamOption {
+	return func(c *streamConfig) { c.reasoningEffort = 3 }
+}
+func WithReasoningMaxTokens(maxTokens uint) StreamOption {
+	return func(c *streamConfig) { c.reasoningMaxTokens = maxTokens }
 }
 func WithTemperature(temperature float64) StreamOption {
 	return func(c *streamConfig) { c.temperature = temperature }

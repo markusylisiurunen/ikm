@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,8 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"slices"
 
 	"github.com/markusylisiurunen/ikm/internal/logger"
 	"github.com/markusylisiurunen/ikm/toolkit/llm"
@@ -41,41 +40,22 @@ func (r llmToolResult) result() (string, error) {
 	return string(b), nil
 }
 
-var llmToolDescription = strings.TrimSpace(`
-Call an LLM with a prompt and optional image or PDF files. This tool provides direct access to language models for analysis, generation, and reasoning tasks.
-
-Supported image formats: .jpg, .jpeg, .png
-Maximum prompt length: 32KB
-
-Use this tool when you need to:
-- Analyze or understand content
-- Generate text, code, or documentation
-- Reason about complex problems
-- Process images or visual content
-- Get expert knowledge on specific topics
-
-The following LLMs are available for use:
-- google/gemini-2.5-flash-preview-05-20: A fast but very capable model, especially great for visual understanding and PDF parsing.
-- anthropic/claude-sonnet-4: A highly capable model for in-depth analysis and reasoning tasks.
-- google/gemini-2.5-pro-preview: The most capable model, suitable for complex reasoning, coding, and analysis tasks.
-`)
-
 var _ llm.Tool = (*llmTool)(nil)
 
 type llmTool struct {
 	logger          logger.Logger
 	openRouterToken string
-	availableModels []string
+	availableModels map[string]string
 }
 
 func NewLLM(openRouterToken string) *llmTool {
 	return &llmTool{
 		logger:          logger.NoOp(),
 		openRouterToken: openRouterToken,
-		availableModels: []string{
-			"google/gemini-2.5-flash-preview-05-20",
-			"anthropic/claude-sonnet-4",
-			"google/gemini-2.5-pro-preview",
+		availableModels: map[string]string{
+			"claude-sonnet-4":  "anthropic/claude-sonnet-4",
+			"gemini-2.5-flash": "google/gemini-2.5-flash",
+			"gemini-2.5-pro":   "google/gemini-2.5-pro",
 		},
 	}
 }
@@ -85,13 +65,16 @@ func (t *llmTool) SetLogger(logger logger.Logger) *llmTool {
 	return t
 }
 
+//go:embed llm.md
+var llmToolDescription string
+
 func (t *llmTool) Spec() (string, string, json.RawMessage) {
-	return "llm", llmToolDescription, json.RawMessage(`{
+	return "llm", strings.TrimSpace(llmToolDescription), json.RawMessage(`{
 		"type": "object",
 		"properties": {
 			"model": {
 				"type": "string",
-				"description": "The LLM model to use for the call. Available models: google/gemini-2.5-flash-preview-05-20, anthropic/claude-sonnet-4, google/gemini-2.5-pro-preview"
+				"description": "The LLM model to use. Must be one of the available models."
 			},
 			"system_prompt": {
 				"type": "string",
@@ -106,14 +89,14 @@ func (t *llmTool) Spec() (string, string, json.RawMessage) {
 				"items": {
 					"type": "string"
 				},
-				"description": "Optional array of file paths to images to include with the prompt. These will be passed after the user prompt in the LLM call. Supported formats: .jpg, .jpeg, .png."
+				"description": "Optional array of absolute file paths to images to include with the prompt. Images will be passed after the user prompt. Must be supported image formats."
 			},
 			"pdf_paths": {
 				"type": "array",
 				"items": {
 					"type": "string"
 				},
-				"description": "Optional array of file paths to PDF documents to include with the prompt. These will be passed after the user prompt in the LLM call. Supported formats: .pdf."
+				"description": "Optional array of absolute file paths to PDF documents to include with the prompt. PDFs will be passed after the user prompt."
 			}
 		},
 		"required": ["model", "user_prompt"]
@@ -124,29 +107,45 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, llmToolTimeout)
 	defer cancel()
 	if !gjson.Valid(args) {
-		t.logger.Error("llm tool called with invalid JSON arguments")
+		t.logger.Errorf("llm tool called with invalid JSON arguments")
 		return llmToolResult{Error: "invalid JSON arguments"}.result()
 	}
+	// validate model
 	model := gjson.Get(args, "model").String()
 	if model == "" {
-		return llmToolResult{Error: "model cannot be empty"}.result()
+		t.logger.Errorf("llm tool called without model")
+		return llmToolResult{Error: "model is required"}.result()
 	}
-	modelValid := slices.Contains(t.availableModels, model)
-	if !modelValid {
+	modelName := t.availableModels[model]
+	if modelName == "" {
+		t.logger.Errorf("llm tool called with invalid model: %s", model)
 		return llmToolResult{Error: fmt.Sprintf("model %q is not available", model)}.result()
 	}
-	systemPrompt := gjson.Get(args, "system_prompt").String()
+	// validate user prompt
 	userPrompt := gjson.Get(args, "user_prompt").String()
 	if userPrompt == "" {
-		return llmToolResult{Error: "user_prompt cannot be empty"}.result()
+		t.logger.Errorf("llm tool called without user_prompt")
+		return llmToolResult{Error: "user_prompt is required"}.result()
 	}
 	if len(userPrompt) > llmToolMaxPromptLength {
+		t.logger.Errorf("llm tool called with user_prompt exceeding max length: %d", len(userPrompt))
 		return llmToolResult{Error: fmt.Sprintf("user_prompt exceeds maximum length of %d characters", llmToolMaxPromptLength)}.result()
 	}
+	// optional system prompt
+	systemPrompt := gjson.Get(args, "system_prompt").String()
+	// process file paths
 	imagePaths := gjson.Get(args, "image_paths").Array()
 	pdfPaths := gjson.Get(args, "pdf_paths").Array()
-	t.logger.Debug("calling LLM with model %s, user prompt length %d, %d images and %d PDFs", model, len(userPrompt), len(imagePaths), len(pdfPaths))
+	// check if claude model is used with images or PDFs
+	isClaudeModel := strings.Contains(model, "claude")
+	if isClaudeModel && (len(imagePaths) > 0 || len(pdfPaths) > 0) {
+		t.logger.Errorf("claude models do not support images or PDFs")
+		return llmToolResult{Error: "claude models do not support images or PDFs"}.result()
+	}
+	// build content parts
+	t.logger.Debugf("calling LLM with model %s, user prompt length %d, %d images and %d PDFs", model, len(userPrompt), len(imagePaths), len(pdfPaths))
 	contentParts := llm.ContentParts{llm.NewTextContentPart(userPrompt)}
+	// add images
 	for _, imagePathValue := range imagePaths {
 		imagePath := imagePathValue.String()
 		if imagePath == "" {
@@ -154,10 +153,12 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 		}
 		imageContentPart, err := t.loadImageFile(imagePath)
 		if err != nil {
+			t.logger.Errorf("failed to load image %s: %s", imagePath, err.Error())
 			return llmToolResult{Error: fmt.Sprintf("failed to load image %s: %s", imagePath, err.Error())}.result()
 		}
 		contentParts = append(contentParts, imageContentPart)
 	}
+	// add PDFs
 	for _, pdfPathValue := range pdfPaths {
 		pdfPath := pdfPathValue.String()
 		if pdfPath == "" {
@@ -165,10 +166,12 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 		}
 		pdfContentPart, err := t.loadPDFFile(pdfPath)
 		if err != nil {
+			t.logger.Errorf("failed to load PDF %s: %s", pdfPath, err.Error())
 			return llmToolResult{Error: fmt.Sprintf("failed to load PDF %s: %s", pdfPath, err.Error())}.result()
 		}
 		contentParts = append(contentParts, pdfContentPart)
 	}
+	// create LLM model and messages
 	llmModel := llm.NewOpenRouter(t.logger, t.openRouterToken, model)
 	messages := []llm.Message{}
 	if systemPrompt != "" {
@@ -181,43 +184,34 @@ func (t *llmTool) Call(ctx context.Context, args string) (string, error) {
 		Role:    llm.RoleUser,
 		Content: contentParts,
 	})
+	// call LLM
 	events := llmModel.Stream(ctx, messages,
-		llm.WithMaxTokens(8192),
+		llm.WithMaxTokens(16384),
 		llm.WithMaxTurns(1),
 		llm.WithTemperature(0.7),
 	)
 	responseMessages, _, err := llm.Rollup(events)
 	if err != nil {
-		t.logger.Error("LLM call failed: %s", err.Error())
+		t.logger.Errorf("LLM call failed: %s", err.Error())
 		return llmToolResult{Error: fmt.Sprintf("LLM call failed: %s", err.Error())}.result()
 	}
 	if len(responseMessages) == 0 {
+		t.logger.Errorf("no response received from LLM")
 		return llmToolResult{Error: "no response received from LLM"}.result()
 	}
 	if responseMessages[0].Role != llm.RoleAssistant {
+		t.logger.Errorf("unexpected response role: %s, expected %s", responseMessages[0].Role, llm.RoleAssistant)
 		return llmToolResult{Error: fmt.Sprintf("unexpected response role: %s, expected %s", responseMessages[0].Role, llm.RoleAssistant)}.result()
 	}
 	answer := responseMessages[0].Content.Text()
-	t.logger.Debug("LLM call completed successfully, response length: %d", len(answer))
+	t.logger.Debugf("LLM call completed successfully, response length: %d", len(answer))
 	return llmToolResult{Answer: answer}.result()
 }
 
 func (t *llmTool) loadImageFile(imagePath string) (llm.ImageContentPart, error) {
-	cwd, err := os.Getwd()
+	absPath, err := validatePath(imagePath)
 	if err != nil {
-		return llm.ImageContentPart{}, fmt.Errorf("failed to get current directory: %w", err)
-	}
-	cleanPath := filepath.Clean(imagePath)
-	if strings.Contains(cleanPath, "..") {
-		return llm.ImageContentPart{}, fmt.Errorf("image path must not contain '..' sequences")
-	}
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return llm.ImageContentPart{}, fmt.Errorf("failed to resolve absolute path: %w", err)
-	}
-	relPath, err := filepath.Rel(cwd, absPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return llm.ImageContentPart{}, fmt.Errorf("image path must be within the current directory")
+		return llm.ImageContentPart{}, fmt.Errorf("invalid image path: %w", err)
 	}
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {
@@ -240,21 +234,9 @@ func (t *llmTool) loadImageFile(imagePath string) (llm.ImageContentPart, error) 
 }
 
 func (t *llmTool) loadPDFFile(pdfPath string) (llm.FileContentPart, error) {
-	cwd, err := os.Getwd()
+	absPath, err := validatePath(pdfPath)
 	if err != nil {
-		return llm.FileContentPart{}, fmt.Errorf("failed to get current directory: %w", err)
-	}
-	cleanPath := filepath.Clean(pdfPath)
-	if strings.Contains(cleanPath, "..") {
-		return llm.FileContentPart{}, fmt.Errorf("PDF path must not contain '..' sequences")
-	}
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return llm.FileContentPart{}, fmt.Errorf("failed to resolve absolute path: %w", err)
-	}
-	relPath, err := filepath.Rel(cwd, absPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return llm.FileContentPart{}, fmt.Errorf("PDF path must be within the current directory")
+		return llm.FileContentPart{}, fmt.Errorf("invalid PDF path: %w", err)
 	}
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {

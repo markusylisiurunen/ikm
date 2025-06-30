@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,15 +20,55 @@ import (
 
 var _ Model = (*OpenRouter)(nil)
 
+type OpenRouterOption func(*OpenRouter)
+
 type OpenRouter struct {
-	logger logger.Logger
-	token  string
-	model  string
-	tools  []Tool
+	logger     logger.Logger
+	token      string
+	model      string
+	tools      []Tool
+	cache      bool
+	provider   *openRouter_Request_Provider
+	transforms []openRouterRequestTransform
 }
 
-func NewOpenRouter(logger logger.Logger, token, model string) *OpenRouter {
-	return &OpenRouter{logger: logger, token: token, model: model}
+func WithOpenRouterCacheEnabled() OpenRouterOption {
+	return func(o *OpenRouter) {
+		o.cache = true
+	}
+}
+
+func WithOpenRouterOnlyProviders(only []string) OpenRouterOption {
+	return func(o *OpenRouter) {
+		o.provider = &openRouter_Request_Provider{
+			Only: only,
+		}
+	}
+}
+
+func WithOpenRouterOrderProviders(order []string, allowFallbacks bool) OpenRouterOption {
+	return func(o *OpenRouter) {
+		o.provider = &openRouter_Request_Provider{
+			Order:          order,
+			AllowFallbacks: &allowFallbacks,
+		}
+	}
+}
+
+func WithOpenRouterRequestTransform(transform openRouterRequestTransform) OpenRouterOption {
+	return func(o *OpenRouter) {
+		if transform != nil {
+			o.transforms = append(o.transforms, transform)
+		}
+	}
+}
+
+func NewOpenRouter(logger logger.Logger, token, model string, opts ...OpenRouterOption) *OpenRouter {
+	o := &OpenRouter{logger: logger, token: token, model: model}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o
 }
 
 func (o *OpenRouter) Register(tool Tool) {
@@ -58,7 +100,15 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 				builder.process(event)
 			}
 			messages, _, err := builder.result()
-			if err != nil || len(messages) != 1 || len(messages[0].ToolCalls) == 0 || turn >= config.maxTurns-1 {
+			if err != nil {
+				ch <- &ErrorEvent{Err: fmt.Errorf("error processing events: %w", err)}
+				return
+			}
+			if len(messages) != 1 {
+				ch <- &ErrorEvent{Err: fmt.Errorf("expected exactly one message, got %d", len(messages))}
+				return
+			}
+			if len(messages[0].ToolCalls) == 0 {
 				return
 			}
 			cloned = append(cloned, messages[0])
@@ -105,7 +155,7 @@ func (o *OpenRouter) streamTurns(ctx context.Context, messages []Message, config
 					cloned = append(cloned, msg)
 				}
 			}
-			if config.stopCondition != nil && config.stopCondition(turn, cloned) {
+			if turn >= config.maxTurns-1 || (config.stopCondition != nil && config.stopCondition(turn, cloned)) {
 				return
 			}
 		}
@@ -152,8 +202,8 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 				continue
 			}
 			var raw string
-			if strings.HasPrefix(line, "data: ") {
-				raw = strings.TrimPrefix(line, "data: ")
+			if after, ok := strings.CutPrefix(line, "data: "); ok {
+				raw = after
 			} else if strings.HasPrefix(line, "{") {
 				raw = line
 			}
@@ -176,6 +226,13 @@ func (o *OpenRouter) streamTurn(ctx context.Context, messages []Message, config 
 				return
 			}
 			if chunk.Usage != nil {
+				o.logger.Debugf("OpenRouter usage: %d prompt tokens (cached %d or %.2f%%), %d completion tokens, total cost $%.6f",
+					chunk.Usage.PromptTokens,
+					chunk.Usage.PromptTokensDetails.CachedTokens,
+					float64(chunk.Usage.PromptTokensDetails.CachedTokens)/float64(chunk.Usage.PromptTokens)*100,
+					chunk.Usage.CompletionTokens,
+					chunk.Usage.Cost,
+				)
 				ch <- &UsageEvent{Usage: Usage{
 					PromptTokens:     chunk.Usage.PromptTokens,
 					CompletionTokens: chunk.Usage.CompletionTokens,
@@ -230,6 +287,7 @@ func (o *OpenRouter) request(
 		MaxTokens:   config.maxTokens,
 		Messages:    []openRouter_Message{},
 		Model:       o.model,
+		Provider:    o.provider,
 		Reasoning:   nil,
 		Stream:      true,
 		Temperature: config.temperature,
@@ -241,17 +299,25 @@ func (o *OpenRouter) request(
 		if err := m.from(msg); err != nil {
 			return nil, fmt.Errorf("error converting message: %w", err)
 		}
+		for _, transform := range o.transforms {
+			transform.transformMessage(&m)
+		}
 		payload.Messages = append(payload.Messages, m)
 	}
+	o.injectCacheControl(payload.Messages)
 	if config.reasoningEffort > 0 {
 		switch config.reasoningEffort {
 		case 1:
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "low"}
 		case 2:
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "medium"}
-		default:
+		case 3:
 			payload.Reasoning = &openRouter_Request_Reasoning{Effort: "high"}
+		default:
+			o.logger.Errorf("invalid reasoning effort: %d, must be 1, 2, or 3", config.reasoningEffort)
 		}
+	} else if config.reasoningMaxTokens > 0 {
+		payload.Reasoning = &openRouter_Request_Reasoning{MaxTokens: config.reasoningMaxTokens}
 	}
 	if len(o.tools) > 0 {
 		payload.Tools = make([]openRouter_Request_Tool, len(o.tools))
@@ -273,7 +339,7 @@ func (o *OpenRouter) request(
 	if err := encoder.Encode(payload); err != nil {
 		return nil, fmt.Errorf("error marshalling request: %w", err)
 	}
-	o.logger.Debug("OpenRouter request payload: %s", data.String())
+	o.logger.Debugj("OpenRouter request payload", data.Bytes())
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", &data)
 	if err != nil {
@@ -285,15 +351,47 @@ func (o *OpenRouter) request(
 	return client.Do(req)
 }
 
+func (o *OpenRouter) injectCacheControl(messages []openRouter_Message) {
+	if !o.cache {
+		return
+	}
+	lastSystemIdx := -1
+	lastUserIdx := -1
+	for i, msg := range messages {
+		switch msg.Role {
+		case "system":
+			lastSystemIdx = i
+		case "user":
+			lastUserIdx = i
+		}
+	}
+	if lastSystemIdx >= 0 {
+		o.addCacheControlToMessage(&messages[lastSystemIdx])
+	}
+	if lastUserIdx >= 0 {
+		o.addCacheControlToMessage(&messages[lastUserIdx])
+	}
+}
+
+func (o *OpenRouter) addCacheControlToMessage(msg *openRouter_Message) {
+	if len(msg.ContentParts) > 0 {
+		lastIdx := len(msg.ContentParts) - 1
+		msg.ContentParts[lastIdx].CacheControl = &openRouter_Message_ContentPart_CacheControl{Type: "ephemeral"}
+	}
+}
+
 func (o *OpenRouter) generationConfig(opts ...StreamOption) streamConfig {
 	c := streamConfig{
-		maxTokens:       8192,
-		maxTurns:        1,
-		reasoningEffort: 0,
-		temperature:     1.0,
+		maxTokens:          8192,
+		maxTurns:           1,
+		reasoningEffort:    0,
+		reasoningMaxTokens: 0,
+		temperature:        1.0,
 	}
 	for _, opt := range opts {
-		opt(&c)
+		if opt != nil {
+			opt(&c)
+		}
 	}
 	return c
 }
@@ -310,6 +408,10 @@ type openRouter_Message_ToolCall struct {
 	ID       string                                `json:"id"`
 	Type     string                                `json:"type"`
 	Function *openRouter_Message_ToolCall_Function `json:"function,omitempty"`
+}
+
+type openRouter_Message_ContentPart_CacheControl struct {
+	Type string `json:"type"`
 }
 
 type openRouter_Message_ContentPart_ImageURL struct {
@@ -330,10 +432,11 @@ func (f openRouter_Message_ContentPart_File) IsZero() bool {
 }
 
 type openRouter_Message_ContentPart struct {
-	Type     string                                  `json:"type"`
-	Text     string                                  `json:"text,omitzero"`
-	ImageURL openRouter_Message_ContentPart_ImageURL `json:"image_url,omitzero"`
-	File     openRouter_Message_ContentPart_File     `json:"file,omitzero"`
+	Type         string                                       `json:"type"`
+	Text         string                                       `json:"text,omitzero"`
+	ImageURL     openRouter_Message_ContentPart_ImageURL      `json:"image_url,omitzero"`
+	File         openRouter_Message_ContentPart_File          `json:"file,omitzero"`
+	CacheControl *openRouter_Message_ContentPart_CacheControl `json:"cache_control,omitempty"`
 }
 
 type openRouter_Message_ContentParts []openRouter_Message_ContentPart
@@ -471,7 +574,7 @@ func (m *openRouter_Message) UnmarshalJSON(data []byte) error {
 func (m openRouter_Message) MarshalJSON() ([]byte, error) {
 	type Alias openRouter_Message
 	aux := &struct {
-		Content any `json:"content,omitempty"`
+		Content any `json:"content,omitzero"`
 		*Alias
 	}{
 		Alias: (*Alias)(&m),
@@ -480,6 +583,8 @@ func (m openRouter_Message) MarshalJSON() ([]byte, error) {
 		aux.Content = m.ContentParts
 	} else if m.ContentString != "" {
 		aux.Content = m.ContentString
+	} else if m.Role == string(RoleAssistant) {
+		aux.Content = ""
 	}
 	return json.Marshal(aux)
 }
@@ -496,17 +601,25 @@ type openRouter_Request_Tool struct {
 }
 
 type openRouter_Request_Reasoning struct {
-	Effort string `json:"effort"`
+	Effort    string `json:"effort,omitzero"`
+	MaxTokens uint   `json:"max_tokens,omitzero"`
 }
 
 type openRouter_Request_Usage struct {
 	Include bool `json:"include"`
 }
 
+type openRouter_Request_Provider struct {
+	Only           []string `json:"only,omitempty"`
+	Order          []string `json:"order,omitempty"`
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
+}
+
 type openRouter_Request struct {
 	MaxTokens   int                           `json:"max_tokens"`
 	Messages    []openRouter_Message          `json:"messages"`
 	Model       string                        `json:"model"`
+	Provider    *openRouter_Request_Provider  `json:"provider,omitempty"`
 	Reasoning   *openRouter_Request_Reasoning `json:"reasoning,omitempty"`
 	Stream      bool                          `json:"stream"`
 	Temperature float64                       `json:"temperature"`
@@ -531,15 +644,19 @@ type openRouter_Chunk_Error struct {
 	Metadata map[string]any `json:"metadata"`
 }
 
+type openRouter_Chunk_CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
 type openRouter_Chunk_PromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 type openRouter_Chunk_Usage struct {
-	CompletionTokens    int                                  `json:"completion_tokens"`
-	Cost                float64                              `json:"cost"`
-	PromptTokens        int                                  `json:"prompt_tokens"`
-	PromptTokensDetails openRouter_Chunk_PromptTokensDetails `json:"prompt_tokens_details"`
-	TotalTokens         int                                  `json:"total_tokens"`
+	CompletionTokens        int                                      `json:"completion_tokens"`
+	CompletionTokensDetails openRouter_Chunk_CompletionTokensDetails `json:"completion_tokens_details"`
+	Cost                    float64                                  `json:"cost"`
+	PromptTokens            int                                      `json:"prompt_tokens"`
+	PromptTokensDetails     openRouter_Chunk_PromptTokensDetails     `json:"prompt_tokens_details"`
+	TotalTokens             int                                      `json:"total_tokens"`
 }
 
 type openRouter_Chunk struct {
@@ -550,4 +667,53 @@ type openRouter_Chunk struct {
 	Model   string                    `json:"model"`
 	Object  string                    `json:"object"`
 	Usage   *openRouter_Chunk_Usage   `json:"usage"`
+}
+
+// request transforms ------------------------------------------------------------------------------
+
+type openRouterRequestTransform interface {
+	transformMessage(*openRouter_Message)
+}
+
+type openRouterHexadecimalToolCallIDRequestTransform struct{}
+
+func NewOpenRouterHexadecimalToolCallIDRequestTransform() openRouterRequestTransform {
+	return &openRouterHexadecimalToolCallIDRequestTransform{}
+}
+
+func (t openRouterHexadecimalToolCallIDRequestTransform) transformMessage(msg *openRouter_Message) {
+	switch msg.Role {
+	case "assistant":
+		for i, toolCall := range msg.ToolCalls {
+			if toolCall.ID != "" {
+				id := t.getID(toolCall.ID)
+				msg.ToolCalls[i].ID = id
+			}
+		}
+	case "tool":
+		if msg.ToolCallID != nil && *msg.ToolCallID != "" {
+			id := t.getID(*msg.ToolCallID)
+			msg.ToolCallID = &id
+		}
+	}
+}
+
+func (t *openRouterHexadecimalToolCallIDRequestTransform) getID(originalID string) string {
+	hash := sha256.Sum256([]byte(originalID))
+	hex := hex.EncodeToString(hash[:])
+	result := ""
+	for _, r := range hex {
+		if len(result) >= 9 {
+			break
+		}
+		allowed := "abcdefghijklmnopqrstuvwxyz0123456789"
+		if strings.ContainsRune(allowed, r) {
+			result += string(r)
+		}
+	}
+	padding := "a1b2c3d4e"
+	for len(result) < 9 {
+		result += string(padding[len(result)])
+	}
+	return result
 }

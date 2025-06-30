@@ -2,18 +2,22 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
-	"slices"
+	"strconv"
 	"strings"
+
+	"slices"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/glamour/styles"
 	"github.com/fatih/color"
+	"github.com/markusylisiurunen/glamour"
+	"github.com/markusylisiurunen/glamour/styles"
 	"github.com/markusylisiurunen/ikm/internal/agent"
 	"github.com/markusylisiurunen/ikm/internal/logger"
 	"github.com/markusylisiurunen/ikm/toolkit/llm"
@@ -50,8 +54,11 @@ type Model struct {
 	logger          logger.Logger
 	runInBashDocker func(context.Context, string) (int, string, string, error)
 
-	openRouterKey   string
-	openRouterModel string
+	anthropicKey  string
+	openRouterKey string
+	openAIKey     string
+
+	model string
 
 	fastButCapableModel    string
 	thoroughButCostlyModel string
@@ -59,11 +66,13 @@ type Model struct {
 	viewport  viewport.Model
 	textinput textinput.Model
 
-	mode         model_Mode
-	modes        []model_Mode
-	agent        *agent.Agent
-	subscription <-chan agent.Event
-	unsubscribe  func()
+	mode            model_Mode
+	modes           []model_Mode
+	disabledTools   []string
+	reasoningEffort uint8
+	agent           *agent.Agent
+	subscription    <-chan agent.Event
+	unsubscribe     func()
 
 	cancelFunc context.CancelFunc
 	errorMsg   string
@@ -104,23 +113,40 @@ func WithSetDefaultModel(model string) modelOption {
 	return func(m *Model) {
 		for _, id := range m.listModels() {
 			if m.getModelSlug(id) == model {
-				m.openRouterModel = id
+				m.model = id
 				return
 			}
 		}
 	}
 }
 
+func WithDisabledTools(tools []string) modelOption {
+	return func(m *Model) {
+		m.disabledTools = tools
+	}
+}
+
+func WithReasoningEffort(effort uint8) modelOption {
+	return func(m *Model) {
+		m.reasoningEffort = effort
+	}
+}
+
 func Initial(
 	logger logger.Logger,
+	anthropicKey string,
 	openRouterKey string,
+	openAIKey string,
 	runInBashDocker func(context.Context, string) (int, string, string, error),
 	opts ...modelOption,
 ) Model {
 	m := Model{
 		logger:          logger,
 		runInBashDocker: runInBashDocker,
+		anthropicKey:    anthropicKey,
 		openRouterKey:   openRouterKey,
+		openAIKey:       openAIKey,
+		reasoningEffort: 2, // default to medium effort
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -129,19 +155,17 @@ func Initial(
 		panic("no modes defined or default mode not set")
 	}
 	// init the model
-	if m.openRouterModel == "" {
-		m.openRouterModel = m.listModels()[0]
+	if m.model == "" {
+		m.model = m.listModels()[0]
 	}
-	m.fastButCapableModel = "google/gemini-2.5-flash-preview-05-20"
+	m.fastButCapableModel = "google/gemini-2.5-flash"
 	m.thoroughButCostlyModel = "anthropic/claude-sonnet-4"
 	// init the agent
 	m.agent = agent.New(logger, []llm.Tool{})
-	model := llm.NewOpenRouter(logger, m.openRouterKey, m.openRouterModel)
-	model.Register(tool.NewBash(m.runInBashDocker).SetLogger(logger))
-	model.Register(tool.NewFS().SetLogger(logger))
-	model.Register(tool.NewLLM(m.openRouterKey).SetLogger(logger))
-	model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(logger))
-	m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
+	if err := m.configureModel(m.model); err != nil {
+		m.logger.Errorf("failed to configure model %s: %v", m.model, err)
+		m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", m.model, err)
+	}
 	m.agent.SetSystem(m.mode.system)
 	m.subscription, m.unsubscribe = m.agent.Subscribe()
 	// init the viewport
@@ -163,6 +187,10 @@ func Initial(
 	return m
 }
 
+func (m Model) isToolDisabled(toolName string) bool {
+	return slices.Contains(m.disabledTools, toolName)
+}
+
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(waitAgentCmd(m.subscription))
 }
@@ -174,7 +202,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if !errors.Is(msg.err, context.Canceled) {
-				m.logger.Error(msg.err.Error())
+				m.logger.Errorf(msg.err.Error())
 				m.errorMsg = msg.err.Error()
 			}
 			m.viewport.SetContent(m.renderContent())
@@ -272,12 +300,24 @@ func (m Model) renderContent() string {
 				switch call.Function.Name {
 				case "bash":
 					s += m.renderToolBash(call.Function.Args)
-				case "fs":
-					s += m.renderToolFS(call.Function.Args)
+				case "fs_list":
+					s += m.renderToolFSList(call.Function.Args)
+				case "fs_read":
+					s += m.renderToolFSRead(call.Function.Args)
+				case "fs_replace":
+					s += m.renderToolFSReplace(call.Function.Args)
+				case "fs_write":
+					s += m.renderToolFSWrite(call.Function.Args)
 				case "llm":
 					s += m.renderToolLLM(call.Function.Args)
 				case "task":
 					s += m.renderToolTask(call.Function.Args)
+				case "think":
+					s += m.renderToolThink(call.Function.Args)
+				case "todo_read":
+					s += m.renderToolTodoRead(call.Function.Args)
+				case "todo_write":
+					s += m.renderToolTodoWrite(call.Function.Args)
 				}
 			}
 		}
@@ -368,15 +408,22 @@ func (m Model) renderToolFields(fields map[string]string) string {
 	var parts []string
 	fieldOrder := []string{
 		"command",
-		"op",
 		"path",
+		"offset",
+		"limit",
+		"no line numbers",
+		"content",
+		"old string",
+		"new string",
+		"replace all",
 		"model",
 		"system prompt",
 		"user prompt",
 		"image files",
 		"pdf files",
 		"effort",
-		"task",
+		"prompt",
+		"agents",
 	}
 	for _, key := range fieldOrder {
 		if value, exists := fields[key]; exists && value != "" {
@@ -390,7 +437,7 @@ func (m Model) renderToolFields(fields map[string]string) string {
 }
 
 func (m Model) renderToolBash(args string) string {
-	cmd := gjson.Get(args, "cmd").String()
+	cmd := gjson.Get(args, "command").String()
 	if cmd == "" {
 		return ""
 	}
@@ -401,14 +448,63 @@ func (m Model) renderToolBash(args string) string {
 	return m.renderToolFields(map[string]string{"command": cmd})
 }
 
-func (m Model) renderToolFS(args string) string {
-	op := gjson.Get(args, "op").String()
-	if op == "" {
+func (m Model) renderToolFSList(args string) string {
+	path := gjson.Get(args, "path").String()
+	if path == "" {
 		return ""
 	}
-	fields := map[string]string{"op": op}
-	if path := gjson.Get(args, "path").String(); path != "" {
-		fields["path"] = path
+	return m.renderToolFields(map[string]string{"path": path})
+}
+
+func (m Model) renderToolFSRead(args string) string {
+	path := gjson.Get(args, "path").String()
+	if path == "" {
+		return ""
+	}
+	fields := map[string]string{"path": path}
+	if offset := gjson.Get(args, "offset").Int(); offset > 0 {
+		fields["offset"] = fmt.Sprintf("%d", offset)
+	}
+	if limit := gjson.Get(args, "limit").Int(); limit > 0 {
+		fields["limit"] = fmt.Sprintf("%d", limit)
+	}
+	if noLineNumbers := gjson.Get(args, "no_line_numbers").Bool(); noLineNumbers {
+		fields["no line numbers"] = "true"
+	}
+	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolFSReplace(args string) string {
+	path := gjson.Get(args, "path").String()
+	oldString := gjson.Get(args, "old_string").String()
+	newString := gjson.Get(args, "new_string").String()
+	if path == "" {
+		return ""
+	}
+	fields := map[string]string{"path": path}
+	if oldString != "" {
+		fields["old string"] = fmt.Sprintf("%d chars", len(oldString))
+	}
+	if newString != "" {
+		fields["new string"] = fmt.Sprintf("%d chars", len(newString))
+	}
+	if replaceAll := gjson.Get(args, "replace_all").Bool(); replaceAll {
+		fields["replace all"] = "true"
+	} else {
+		fields["replace all"] = "false"
+	}
+	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolFSWrite(args string) string {
+	path := gjson.Get(args, "path").String()
+	content := gjson.Get(args, "content").String()
+	if path == "" {
+		return ""
+	}
+	fields := map[string]string{"path": path}
+	if content != "" {
+		fields["content"] = fmt.Sprintf("%d bytes", len(content))
 	}
 	return m.renderToolFields(fields)
 }
@@ -439,17 +535,74 @@ func (m Model) renderToolLLM(args string) string {
 
 func (m Model) renderToolTask(args string) string {
 	effort := gjson.Get(args, "effort").String()
-	task := gjson.Get(args, "task").String()
-	if effort == "" || task == "" {
+	prompt := gjson.Get(args, "prompt").String()
+	agentsData := gjson.Get(args, "agents")
+	if effort == "" || prompt == "" || !agentsData.Exists() || !agentsData.IsArray() {
 		return ""
 	}
 	fields := map[string]string{"effort": effort}
-	taskLines := strings.Split(task, "\n")
-	if len(taskLines) > 0 {
-		taskLine := strings.TrimSpace(taskLines[0])
-		fields["task"] = taskLine
+	promptLines := strings.Split(prompt, "\n")
+	if len(promptLines) > 0 {
+		promptLine := strings.TrimSpace(promptLines[0])
+		fields["prompt"] = promptLine
 	}
+	agentCount := len(agentsData.Array())
+	fields["agents"] = fmt.Sprintf("%d", agentCount)
 	return m.renderToolFields(fields)
+}
+
+func (m Model) renderToolThink(args string) string {
+	thought := gjson.Get(args, "thought").String()
+	if thought == "" {
+		return ""
+	}
+	var s string
+	s += "\n"
+	s += color.New(color.Faint).Sprint(wrapWithPrefix(thought, "  ", m.viewport.Width))
+	return s
+}
+
+func (m Model) renderToolTodoRead(_ string) string {
+	return ""
+}
+
+func (m Model) renderToolTodoWrite(args string) string {
+	todosData := gjson.Get(args, "todos")
+	if !todosData.Exists() || !todosData.IsArray() {
+		return ""
+	}
+	var todos []string
+	for _, todo := range todosData.Array() {
+		content := todo.Get("content").String()
+		status := todo.Get("status").String()
+		if content == "" || status == "" {
+			continue
+		}
+		var checkbox string
+		switch status {
+		case "completed":
+			checkbox = "[x]"
+		case "in_progress":
+			checkbox = "[~]"
+		default:
+			checkbox = "[ ]"
+		}
+		todoLine := fmt.Sprintf("  %s %s", checkbox, content)
+		if len(todoLine) > m.viewport.Width {
+			todoLine = todoLine[:m.viewport.Width-3] + "..."
+		}
+		switch status {
+		case "completed":
+			todoLine = color.New(color.FgGreen).Sprint(todoLine)
+		case "in_progress":
+			todoLine = color.New(color.FgYellow).Sprint(todoLine)
+		}
+		todos = append(todos, todoLine)
+	}
+	if len(todos) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(todos, "\n")
 }
 
 func (m Model) renderFooter() string {
@@ -471,7 +624,7 @@ func (m Model) renderFooter() string {
 	_, usage := m.agent.GetHistoryState()
 	var meta string
 	meta += fmt.Sprintf("%s, ", m.mode.name)
-	meta += fmt.Sprintf("%s, ", m.getModelSlug(m.openRouterModel))
+	meta += fmt.Sprintf("%s, ", m.getModelSlug(m.model))
 	meta += fmt.Sprintf("cost: %.3f €, ", usage.TotalCost)
 	meta += fmt.Sprintf("tokens: %d", usage.PromptTokens+usage.CompletionTokens)
 	if isRunning {
@@ -486,15 +639,15 @@ func (m Model) listModels() []string {
 	return []string{
 		"anthropic/claude-opus-4",
 		"anthropic/claude-sonnet-4",
-		"google/gemini-2.5-flash-preview-05-20",
-		"google/gemini-2.5-flash-preview-05-20:thinking",
-		"google/gemini-2.5-pro-preview",
+		"google/gemini-2.5-flash",
+		"google/gemini-2.5-pro",
 		"mistralai/devstral-small",
 		"openai/codex-mini",
 		"openai/gpt-4.1",
 		"openai/gpt-4.1-mini",
 		"openai/o3",
-		"openai/o4-mini-high",
+		"openai/o4-mini",
+		"qwen/qwen3-32b",
 	}
 }
 
@@ -504,11 +657,9 @@ func (m Model) getModelSlug(model string) string {
 		return "claude-opus-4"
 	case "anthropic/claude-sonnet-4":
 		return "claude-sonnet-4"
-	case "google/gemini-2.5-flash-preview-05-20":
+	case "google/gemini-2.5-flash":
 		return "gemini-2.5-flash"
-	case "google/gemini-2.5-flash-preview-05-20:thinking":
-		return "gemini-2.5-flash-thinking"
-	case "google/gemini-2.5-pro-preview":
+	case "google/gemini-2.5-pro":
 		return "gemini-2.5-pro"
 	case "mistralai/devstral-small":
 		return "devstral-small"
@@ -520,8 +671,10 @@ func (m Model) getModelSlug(model string) string {
 		return "gpt-4.1-mini"
 	case "openai/o3":
 		return "o3"
-	case "openai/o4-mini-high":
-		return "o4-mini-high"
+	case "openai/o4-mini":
+		return "o4-mini"
+	case "qwen/qwen3-32b":
+		return "qwen3-32b"
 	default:
 		return ""
 	}
@@ -543,7 +696,7 @@ func (m Model) getSlashCommandHelp(cmd string, args []string) string {
 	case "clear":
 		return "clears the conversation history."
 	case "copy":
-		return "copies the last assistant message to the clipboard."
+		return "copies a message or messages to the clipboard: default, index-based or all."
 	case "mode":
 		names := make([]string, len(m.modes))
 		for i, mode := range m.modes {
@@ -575,7 +728,7 @@ func (m *Model) handleSlashCommand() {
 	case "/clear":
 		m.handleClearSlashCommand()
 	case "/copy":
-		m.handleCopySlashCommand()
+		m.handleCopySlashCommand(fields[1:])
 	case "/mode":
 		m.handleModeSlashCommand(fields[1:])
 	case "/model":
@@ -588,22 +741,106 @@ func (m *Model) handleClearSlashCommand() {
 	m.errorMsg = ""
 }
 
-func (m *Model) handleCopySlashCommand() {
+func (m *Model) handleCopySlashCommand(args []string) {
 	messages, _ := m.agent.GetHistoryState()
-	var content string
-	for _, i := range slices.Backward(messages) {
-		if i.Role == llm.RoleAssistant {
-			content = i.Content.Text()
-			break
+	if len(args) > 0 && args[0] == "all" {
+		type jsonMessage_ToolCall struct {
+			FuncName string          `json:"func_name"`
+			FuncArgs json.RawMessage `json:"func_args"`
+		}
+		type jsonMessage struct {
+			Role      string                 `json:"role"`
+			Text      string                 `json:"text,omitzero"`
+			Result    any                    `json:"result,omitzero"`
+			ToolCalls []jsonMessage_ToolCall `json:"tool_calls,omitzero"`
+		}
+		var jsonMessages []jsonMessage
+		for _, msg := range messages {
+			switch msg.Role {
+			case llm.RoleSystem:
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role: "system",
+					Text: msg.Content.Text(),
+				})
+			case llm.RoleAssistant:
+				var toolCalls []jsonMessage_ToolCall
+				for _, call := range msg.ToolCalls {
+					toolCalls = append(toolCalls, jsonMessage_ToolCall{
+						FuncName: call.Function.Name,
+						FuncArgs: json.RawMessage(call.Function.Args),
+					})
+				}
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role:      "assistant",
+					Text:      msg.Content.Text(),
+					ToolCalls: toolCalls,
+				})
+			case llm.RoleTool:
+				var result any = msg.Content.Text()
+				if json.Valid([]byte(msg.Content.Text())) {
+					result = json.RawMessage(msg.Content.Text())
+				}
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role:   "tool",
+					Result: result,
+				})
+			case llm.RoleUser:
+				jsonMessages = append(jsonMessages, jsonMessage{
+					Role: "user",
+					Text: msg.Content.Text(),
+				})
+			}
+		}
+		jsonMessagesData, err := json.MarshalIndent(jsonMessages, "", "  ")
+		if err != nil {
+			m.logger.Errorf("failed to marshal messages to JSON: %v", err)
+			return
+		}
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(string(jsonMessagesData))
+		if err := cmd.Run(); err != nil {
+			m.logger.Errorf("failed to copy to clipboard: %v", err)
+		}
+		return
+	}
+	var assistantMessages []llm.Message
+	for _, msg := range messages {
+		if msg.Role == llm.RoleAssistant {
+			assistantMessages = append(assistantMessages, msg)
 		}
 	}
+	if len(assistantMessages) == 0 {
+		return
+	}
+	var targetMessage llm.Message
+	if len(args) > 0 {
+		var index int
+		if strings.HasPrefix(args[0], "-") {
+			var err error
+			index, err = strconv.Atoi(args[0][1:])
+			if err != nil || index <= 0 || index > len(assistantMessages) {
+				return
+			}
+			targetMessage = assistantMessages[len(assistantMessages)-index]
+		} else {
+			var err error
+			index, err = strconv.Atoi(args[0])
+			if err != nil || index < 1 || index > len(assistantMessages) {
+				return
+			}
+			targetMessage = assistantMessages[index-1]
+		}
+	} else {
+		targetMessage = assistantMessages[len(assistantMessages)-1]
+	}
+	content := targetMessage.Content.Text()
 	if content == "" {
 		return
 	}
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(content)
 	if err := cmd.Run(); err != nil {
-		m.logger.Error("failed to copy to clipboard: %v", err)
+		m.logger.Errorf("failed to copy to clipboard: %v", err)
 	}
 }
 
@@ -623,14 +860,183 @@ func (m *Model) handleModelSlashCommand(args []string) {
 	}
 	for _, id := range m.listModels() {
 		if m.getModelSlug(id) == args[0] {
-			m.openRouterModel = id
-			model := llm.NewOpenRouter(m.logger, m.openRouterKey, m.openRouterModel)
-			model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
-			model.Register(tool.NewFS().SetLogger(m.logger))
-			model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
-			model.Register(tool.NewTask(m.openRouterKey, m.fastButCapableModel, m.thoroughButCostlyModel).SetLogger(m.logger))
-			m.agent.SetModel(model, llm.WithMaxTokens(32768), llm.WithReasoningEffortHigh())
+			m.model = id
+			if err := m.configureModel(id); err != nil {
+				m.logger.Errorf("failed to configure model %s: %v", id, err)
+				m.errorMsg = fmt.Sprintf("failed to configure model %s: %v", id, err)
+				m.viewport.SetContent(m.renderContent())
+				m.viewport.GotoBottom()
+			}
 			return
 		}
+	}
+}
+
+func (m Model) configureModel(modelName string) error {
+	var (
+		model         llm.Model
+		streamOptions []llm.StreamOption
+	)
+	switch modelName {
+	case "anthropic/claude-opus-4":
+		model = llm.NewAnthropic(m.logger, m.anthropicKey, "claude-opus-4-20240620",
+			llm.WithAnthropicCacheEnabled(),
+		)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(1.0),
+			m.getReasoningEffortOption(),
+		}
+	case "anthropic/claude-sonnet-4":
+		model = llm.NewAnthropic(m.logger, m.anthropicKey, "claude-sonnet-4-20250514",
+			llm.WithAnthropicCacheEnabled(),
+		)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(1.0),
+			m.getReasoningEffortOption(),
+		}
+	case "google/gemini-2.5-flash":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
+			m.getReasoningEffortOption(),
+		}
+	case "google/gemini-2.5-pro":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName) // NOTE: supports implicit caching
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
+			m.getReasoningMaxTokensOption(32_768, 256),
+		}
+	case "mistralai/devstral-small":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+			llm.WithOpenRouterCacheEnabled(),
+			llm.WithOpenRouterOrderProviders([]string{"Mistral"}, false),
+			llm.WithOpenRouterRequestTransform(llm.NewOpenRouterHexadecimalToolCallIDRequestTransform()),
+		)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+		}
+	case "openai/codex-mini":
+		model = llm.NewOpenAI(m.logger, m.openAIKey, "codex-mini-latest")
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
+			m.getReasoningEffortOption(),
+		}
+	case "openai/gpt-4.1":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
+		}
+	case "openai/gpt-4.1-mini":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			llm.WithTemperature(0.7),
+		}
+	case "openai/o3":
+		model = llm.NewOpenAI(m.logger, m.openAIKey, "o3")
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "openai/o4-mini":
+		model = llm.NewOpenAI(m.logger, m.openAIKey, "o4-mini")
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(32_768),
+			m.getReasoningEffortOption(),
+		}
+	case "qwen/qwen3-32b":
+		model = llm.NewOpenRouter(m.logger, m.openRouterKey, modelName,
+			llm.WithOpenRouterCacheEnabled(),
+			llm.WithOpenRouterOrderProviders([]string{"Cerebras"}, false),
+		)
+		streamOptions = []llm.StreamOption{
+			llm.WithMaxTokens(8_192), // NOTE: the context window is only 32,768 tokens, so the output tokens must be significantly lower
+			m.getReasoningEffortOption(),
+		}
+	default:
+		return fmt.Errorf("unknown model: %s", modelName)
+	}
+	m.registerTools(model)
+	m.agent.SetModel(model, streamOptions...)
+	return nil
+}
+
+func (m Model) registerTools(model llm.Model) {
+	if !m.isToolDisabled("bash") {
+		model.Register(tool.NewBash(m.runInBashDocker).SetLogger(m.logger))
+	} else {
+		m.logger.Debugf("skipped disabled tool: bash")
+	}
+	if !m.isToolDisabled("fs") {
+		model.Register(tool.NewFSList().SetLogger(m.logger))
+		model.Register(tool.NewFSRead().SetLogger(m.logger))
+		model.Register(tool.NewFSReplace().SetLogger(m.logger))
+		model.Register(tool.NewFSWrite().SetLogger(m.logger))
+	} else {
+		m.logger.Debugf("skipped disabled tool: fs")
+	}
+	if !m.isToolDisabled("llm") {
+		model.Register(tool.NewLLM(m.openRouterKey).SetLogger(m.logger))
+	} else {
+		m.logger.Debugf("skipped disabled tool: llm")
+	}
+	if !m.isToolDisabled("task") {
+		model.Register(tool.NewTask(
+			m.runInBashDocker,
+			m.openRouterKey,
+			m.fastButCapableModel, m.thoroughButCostlyModel,
+		).SetLogger(m.logger))
+	} else {
+		m.logger.Debugf("skipped disabled tool: task")
+	}
+	if !m.isToolDisabled("think") {
+		model.Register(tool.NewThink().SetLogger(m.logger))
+	} else {
+		m.logger.Debugf("skipped disabled tool: think")
+	}
+	if !m.isToolDisabled("todo") {
+		model.Register(tool.NewTodoRead().SetLogger(m.logger))
+		model.Register(tool.NewTodoWrite().SetLogger(m.logger))
+	} else {
+		m.logger.Debugf("skipped disabled tool: todo")
+	}
+}
+
+func (m Model) getReasoningEffortOption() llm.StreamOption {
+	switch m.reasoningEffort {
+	case 0:
+		return nil
+	case 1:
+		return llm.WithReasoningEffortLow()
+	case 2:
+		return llm.WithReasoningEffortMedium()
+	case 3:
+		return llm.WithReasoningEffortHigh()
+	default:
+		panic(fmt.Sprintf("invalid reasoning effort: %d", m.reasoningEffort))
+	}
+}
+
+func (m Model) getReasoningMaxTokensOption(maxTokens int, minReasoningTokens uint) llm.StreamOption {
+	switch m.reasoningEffort {
+	case 0:
+		if minReasoningTokens > 0 {
+			return llm.WithReasoningMaxTokens(minReasoningTokens)
+		}
+		return nil
+	case 1:
+		return llm.WithReasoningMaxTokens(min(2048, uint(math.Round(0.2*float64(maxTokens)))))
+	case 2:
+		return llm.WithReasoningMaxTokens(min(8192, uint(math.Round(0.5*float64(maxTokens)))))
+	case 3:
+		return llm.WithReasoningMaxTokens(min(16384, uint(math.Round(0.8*float64(maxTokens)))))
+	default:
+		panic(fmt.Sprintf("invalid reasoning effort: %d", m.reasoningEffort))
 	}
 }
